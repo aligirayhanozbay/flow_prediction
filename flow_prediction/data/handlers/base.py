@@ -7,7 +7,6 @@ import numpy as np
 
 from ..utils.PyFRIntegratorHandler import PyFRIntegratorHandler
 from ..geometry.bezier_shapes.shapes_utils import Shape
-#filename+'_'+str(i),None,n_pts,n_sampling_pts,radius,edgy
 
 def shell_cmd_stdout(cmd):
     return subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE).communicate()[0]
@@ -26,8 +25,8 @@ class BasePyFRDatahandler:
             'xmax': 25.0,
             'ymin': -10.0,
             'ymax': 10.0
-        }
-        ,'magnify': 1.0
+        },
+        'magnify': 1.0
     }
     device_placement_counter = itertools.count()
     def __init__(self, mesh_files = None, config_files = None, n_bezier = 0, bezier_config = None, load_cached = False, force_remesh = False, keep_directories_clean = True, backend = None, auto_device_placement = False):
@@ -54,7 +53,7 @@ class BasePyFRDatahandler:
             n_devices = len(auto_device_placement)
             auto_device_placement = {str(dev_index): 1/n_devices for dev_index in range(n_devices)}
         if isinstance(auto_device_placement, dict) and (not backend == 'openmp'):
-            #build a dict mapping the modulus of the solver object index to the device id
+            #build a dict mapping the modulo of the solver object index to the device id
             min_weight = min(auto_device_placement.values())
             auto_device_placement = {int(dev_index): round(dev_weight/min_weight) for dev_index,dev_weight in zip(auto_device_placement.keys(), auto_device_placement.values())}
             solvers_per_round = np.array(sorted([(dev_index, solvers_per_round) for dev_index, solvers_per_round in zip(auto_device_placement.keys(), auto_device_placement.values())], key=lambda x: x[0]))
@@ -85,8 +84,6 @@ class BasePyFRDatahandler:
             integs = []
             for m,c,i in zip(mesh_files, itertools.repeat(config_files) if isinstance(config_files, str) else config_files, integ_ids):
                 integs.append(self.create_integrator_handler(m,c,backend,i))
-            #with concurrent.futures.ThreadPoolExecutor() as executor:
-            #    integs = executor.map(lambda x: self.create_integrator_handler(x[0],x[1],backend,integrator_id=x[2]), zip(mesh_files, itertools.repeat(config_files) if isinstance(config_files, str) else config_files, integ_ids))
             self.integrators = self.integrators + list(integs)
         elif (mesh_files is not None) ^ (config_files is not None):
             raise(ValueError('Both mesh files and PyFR config files must be supplied'))
@@ -99,13 +96,14 @@ class BasePyFRDatahandler:
             integs = []
             for c,b,i in zip(cfg_iterator, backend_iterator, integ_ids):
                 integs.append(self._create_bezier_integrator(c,b,i))
-            #with concurrent.futures.ThreadPoolExecutor() as executor:
-            #    integs = executor.map(self._create_bezier_integrator, cfg_iterator, backend_iterator, integ_ids)
             self.integrators = self.integrators + list(integs)
 
         for integ in self.integrators:
             integ.start()
 
+    def __del__(self):
+        for integ in self.integrators:
+            integ.stop()
 
     def _geo_to_msh(self,path):
         path = os.path.realpath(path)
