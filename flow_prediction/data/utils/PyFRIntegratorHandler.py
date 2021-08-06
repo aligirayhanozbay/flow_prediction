@@ -4,12 +4,13 @@ import multiprocessing
 import concurrent.futures
 import scipy.interpolate
 import numpy as np
+import secrets
 
 from .pyfr_solver_create import pyfr_solver_create
 
 class PyFRIntegratorHandler:
         executor = concurrent.futures.ThreadPoolExecutor()
-        def __init__(self, mesh_path, ini_path, backend = 'openmp', device_id=None):
+        def __init__(self, mesh_path, ini_path, backend = 'openmp', device_id=None, case_id=None):
                 '''
         	Handler object to manage running multiple PyFR integrators (i.e. solvers) simultaneously.
 
@@ -20,22 +21,26 @@ class PyFRIntegratorHandler:
         	-ini_path: str. Path to a pyfr config (.ini) file.
         	-backend: str. PyFR backend to use (openmp etc).
         	-device_id: int. id of the device to run the solver on. No effect for openmp backend.
-        	-auto_device_placement: bool, int, List[int] or Dict[int,float]. False follows default pyfr behaviour based on the ini. True to automatically place each new created solver on different devices in a round-robin fashion. List of integers to use the specified device IDs. If a dict, the keys are the device ids to be used and the corresponding float value assigns a weight Does nothing for openmp backend.
+        	-case_id: str. Unique identifier for the case/solver. Will be randomly generated if not provided.
         	'''
                 self._soln = None
                 self._process = None
                 self._mesh_coords = None
+                self._mesh_coords_shape = None
+                self._n_spatialdims = None
+                self._n_solnvars = None
                 self.solver = None
                 self.mesh_path = mesh_path
                 self.ini_path = ini_path
                 self.backend = backend
                 self.device_id = device_id
                 self._pipe_main, self._pipe_child = multiprocessing.Pipe(duplex=True)
+                self.case_id = case_id if case_id is not None else secrets.token_hex(4)
 
         def _raise_multiprocessing_error(self):
-                if self.solver is None and self._process is None:#no solver available
+                if (multiprocessing.current_process().name == 'MainProcess') and self.solver is None and self._process is None:#no solver available
                         raise(RuntimeError('There is no solver on the main process and no child process exists (i.e. there is no solver). Run the create_solver method to create a solver on the main thread or the start method to create a solver on a child process.'))
-                elif self.solver is not None and self._process is not None:
+                elif (multiprocessing.current_process().name == 'MainProcess') and self.solver is not None and self._process is not None:
                         raise(RuntimeError('Both a child solver process and a solver on the main process exist. Something went wrong - did you call both start() and create_solver() on the main process?'))
 
         def _message_to_child_noreply(self,msg):
@@ -65,9 +70,17 @@ class PyFRIntegratorHandler:
                         result = self._interpolate_soln(*msg[1][:-1],**msg[1][-1])
                         self._pipe_child.send(result)
                 elif msg[0] == 101:#synchornize solution variable
-                        self._pipe_child.send(self.solver.soln)
+                        self._pipe_child.send(self.soln)
                 elif msg[0] == 102:#synchronize solution grad variable
-                        self._pipe_child.send(self.solver.grad_soln)
+                        self._pipe_child.send(self.grad_soln)
+                elif msg[0] == 103:#synchronize solution mesh coordinates
+                        self._pipe_child.send(self.mesh_coords)
+                elif msg[0] == 104:#get mesh coords shape without the need to copy mesh coords
+                        self._pipe_child.send(self.mesh_coords_shape)
+                elif msg[0] == 105:#number of spatial dims
+                        self._pipe_child.send(self.n_spatialdims)
+                elif msg[0] == 106:#number of spatial dims
+                        self._pipe_child.send(self.n_solnvars)
 
         def _solver_process(self):
                 self.create_solver()
@@ -101,7 +114,8 @@ class PyFRIntegratorHandler:
         def soln(self):
                 if self.solver is None and self._process is not None:
                         self._soln = self._message_to_child_awaitreply((101,None))
-                elif self.solver is not None and self._process is None:#solver running in main process. directly compute result.
+                elif self.solver is not None and (self._process is None or multiprocessing.current_process().name != 'MainProcess'):
+                        #solver running in main process, or property accessed from child. directly compute result.
                         self._soln = self.solver.soln
                 else:
                         self._raise_multiprocessing_error()
@@ -110,20 +124,71 @@ class PyFRIntegratorHandler:
         @property
         def grad_soln(self):
                 if self.solver is None and self._process is not None:
-                        self._soln = self._message_to_child_awaitreply((102,None))
-                elif self.solver is not None and self._process is None:
+                        self._grad_soln = self._message_to_child_awaitreply((102,None))
+                elif self.solver is not None and (self._process is None or multiprocessing.current_process().name != 'MainProcess'):
                         self._grad_soln = self.solver.grad_soln
                 else:
                         self._raise_multiprocessing_error()
                 return self._grad_soln
 
+        def concatenated_soln(self, gradients = False):
+                '''
+                Returns the solution from all element types concatenated into a single array
+                '''
+                if gradients:
+                        concatenated_vars = zip(*[s.transpose((0,2,1,3)).reshape(self.n_spatialdims * self.n_solnvars,s.shape[1],s.shape[3]) for s in self.grad_soln])
+                else:
+                        concatenated_vars = zip(*[s.transpose((1,0,2)) for s in self.soln])
+                soln_vals = np.stack(list(map(lambda s: np.concatenate([v.reshape(-1) for v in s],0),concatenated_vars)),0) #convert solutions from different element types into a single (n_variables,total number of soln points) shaped tensor
+                return soln_vals
+
+        def _compute_mesh_coords(self):
+                ndims = self.solver.pseudointegrator.system.ele_ploc_upts[0].shape[1]
+                mesh_coords = np.concatenate([ecoords.transpose((0,2,1)).reshape(-1,ndims) for ecoords in self.solver.pseudointegrator.system.ele_ploc_upts],0)
+                return mesh_coords
+
         @property
         def mesh_coords(self):
-                if self._mesh_coords is None:
-                        ndims = self.solver.pseudointegrator.system.ele_ploc_upts[0].shape[1]
-                        self._mesh_coords = np.concatenate([ecoords.transpose((0,2,1)).reshape(-1,ndims) for ecoords in self.solver.pseudointegrator.system.ele_ploc_upts],0)
+                if self._mesh_coords is None and self.solver is None and self._process is not None:
+                        self._mesh_coords = self._message_to_child_awaitreply((103,None))
+                elif self._mesh_coords is None and self.solver is not None and (self._process is None or multiprocessing.current_process().name != 'MainProcess'):
+                        self._mesh_coords = self._compute_mesh_coords()
+                elif (multiprocessing.current_process().name == 'MainProcess') and not ((self.solver is None)^(self._process is None)):
+                        self._raise_multiprocessing_error()
                 return self._mesh_coords
 
+        @property
+        def mesh_coords_shape(self):
+                '''
+                Get the shape of mesh_coords without the need to copy mesh_coords from the child process to the parent
+                '''
+                if self._mesh_coords_shape is None and self.solver is None and self._process is not None:
+                        self._mesh_coords_shape = self._message_to_child_awaitreply((104,None))
+                elif self._mesh_coords_shape is None and self.solver is not None and (self._process is None or multiprocessing.current_process().name != 'MainProcess'):
+                        self._mesh_coords_shape = self.mesh_coords.shape
+                elif (multiprocessing.current_process().name == 'MainProcess') and not ((self.solver is None)^(self._process is None)):
+                        self._raise_multiprocessing_error()
+                return self._mesh_coords_shape
+
+        @property
+        def n_spatialdims(self):
+                if self._n_spatialdims is None and self.solver is None and self._process is not None:
+                        self._n_spatialdims = self._message_to_child_awaitreply((105,None))
+                elif self._n_spatialdims is None and self.solver is not None and (self._process is None or multiprocessing.current_process().name != 'MainProcess'):
+                        self._n_spatialdims = self.solver.grad_soln[0].shape[0]
+                elif (multiprocessing.current_process().name == 'MainProcess') and not ((self.solver is None)^(self._process is None)):
+                        self._raise_multiprocessing_error()
+                return self._n_spatialdims
+
+        @property
+        def n_solnvars(self):
+                if self._n_solnvars is None and self.solver is None and self._process is not None:
+                        self._n_solnvars = self._message_to_child_awaitreply((106,None))
+                elif self._n_solnvars is None and self.solver is not None and (self._process is None or multiprocessing.current_process().name != 'MainProcess'):
+                        self._n_solnvars = self.solver.soln[0].shape[1]
+                elif (multiprocessing.current_process().name == 'MainProcess') and not ((self.solver is None)^(self._process is None)):
+                        self._raise_multiprocessing_error()
+                return self._n_solnvars
 
         def _interpolate_soln(self, target_coords, gradients = False, **scipy_griddata_opts):
                 '''
@@ -131,16 +196,10 @@ class PyFRIntegratorHandler:
 
 		gradients: bool. If False, the soln variables will be interpolated. If True, the gradients of the soln variables will be interpolated.
 	        '''
-                n_solnvars = self.solver.soln[0].shape[1]
-                if gradients:
-                        n_spatialdims = self.solver.grad_soln[0].shape[0]
-                        concatenated_vars = zip(*[s.transpose((0,2,1,3)).reshape(n_spatialdims * n_solnvars,s.shape[1],s.shape[3]) for s in self.solver.grad_soln])
-                else:
-                        concatenated_vars = zip(*[s.transpose((1,0,2)) for s in self.solver.soln])
-                soln_vals = np.stack(list(map(lambda s: np.concatenate([v.reshape(-1) for v in s],0),concatenated_vars)),0) #convert solutions from different element types into a single (n_variables,total number of soln points) shaped tensor
+                soln_vals = self.concatenated_soln(gradients=gradients)
                 interpolated_values = np.stack(list(self.executor.map(lambda v: scipy.interpolate.griddata(self.mesh_coords, v, target_coords, **scipy_griddata_opts), soln_vals)),-1)
                 if gradients:
-                        interpolated_values = interpolated_values.reshape(-1, n_solnvars, n_spatialdims)
+                        interpolated_values = interpolated_values.reshape(-1, self.n_solnvars, self.n_spatialdims)
                 return interpolated_values
 
         def interpolate_soln(self, target_coords, gradients = False, **scipy_griddata_opts):
