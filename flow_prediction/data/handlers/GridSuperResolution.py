@@ -1,12 +1,13 @@
 from .base import BasePyFRDatahandler
 import numpy as np
+import h5py
 
 class GridSuperResolution(BasePyFRDatahandler):
 
     def __init__(self, batch_size, grid_extent, high_res_gridsize, downsample_factor, inputs_retain_shape = False, load_cache = None, **base_args):
 
         self.batch_size = batch_size
-        self.inputs_retain_shape = inputs_retain_shape
+        self.inputs_retain_shape = inputs_retain_shape #if true e.g. [2,3,4,5,6,7] is downsampled to [2,2,4,4,6,6]
         
 
         self.high_res_grid_coords = self._generate_grid(grid_extent, high_res_gridsize)
@@ -48,6 +49,15 @@ class GridSuperResolution(BasePyFRDatahandler):
     def _record_snapshots(self, tidx):
         for integ in self.integrators:
             self.cache[integ.case_id][tidx] = self._grads_to_vorticity(integ.interpolate_soln(self.high_res_grid_coords, gradients = True)).reshape(*self.high_res_gridsize)
+
+    def save(self, path = None):
+        if path is None:
+            path = 'results.h5'
+        with h5py.File(path, 'w') as f:
+            for integ in self.integrators:
+                subgroup = f.create_group(integ.case_id)
+                subgroup.create_dataset('vorticity', data=self.cache[integ.case_id])
+                subgroup.create_dataset('coordinates', data=self.high_res_grid_coords)
 
     def __getitem__(self, idx):
         pass

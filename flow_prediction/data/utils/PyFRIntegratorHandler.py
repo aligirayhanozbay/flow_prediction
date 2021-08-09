@@ -5,11 +5,12 @@ import concurrent.futures
 import scipy.interpolate
 import numpy as np
 import secrets
+import functools
 
 from .pyfr_solver_create import pyfr_solver_create
 
 class PyFRIntegratorHandler:
-        executor = concurrent.futures.ThreadPoolExecutor()
+        #executor = concurrent.futures.ProcessPoolExecutor()
         def __init__(self, mesh_path, ini_path, backend = 'openmp', device_id=None, case_id=None):
                 '''
         	Handler object to manage running multiple PyFR integrators (i.e. solvers) simultaneously.
@@ -196,8 +197,14 @@ class PyFRIntegratorHandler:
 
 		gradients: bool. If False, the soln variables will be interpolated. If True, the gradients of the soln variables will be interpolated.
 	        '''
+                
+                
                 soln_vals = self.concatenated_soln(gradients=gradients)
-                interpolated_values = np.stack(list(self.executor.map(lambda v: scipy.interpolate.griddata(self.mesh_coords, v, target_coords, **scipy_griddata_opts), soln_vals)),-1)
+                partial_func = functools.partial(scipy.interpolate.griddata, self.mesh_coords, xi=target_coords, **scipy_griddata_opts)
+                with concurrent.futures.ProcessPoolExecutor() as executor:
+                        interpolated_values = np.stack(list(executor.map(partial_func, soln_vals)),-1)
+
+                        
                 if gradients:
                         interpolated_values = interpolated_values.reshape(-1, self.n_solnvars, self.n_spatialdims)
                 return interpolated_values

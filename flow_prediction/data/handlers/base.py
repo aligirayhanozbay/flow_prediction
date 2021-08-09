@@ -205,7 +205,7 @@ class BasePyFRDatahandler:
         #overload this to record different quantities
         for integ in self.integrators:
             self.cache[integ.case_id][tidx,...,:integ.n_solnvars] = integ.concatenated_soln(gradients=False).transpose(1,0)
-            self.cache[integ.case_id][tidx,...,integ.n_solnvars:] = integ.concatenated_soln(gradients=True).reshape(-1, integ.n_solnvars*integ.n_spatialdims)
+            self.cache[integ.case_id][tidx,...,integ.n_solnvars:] = integ.concatenated_soln(gradients=True).transpose(1,0)
         
     def generate_data(self):
         for tidx, t in enumerate(self.sample_times):
@@ -217,7 +217,11 @@ class BasePyFRDatahandler:
             path = 'results.h5'
         with h5py.File(path, 'w') as f:
             for integ in self.integrators:
-                f.create_dataset(integ.case_id, data=self.cache[integ.case_id])
+                subgroup = f.create_group(integ.case_id)
+                subgroup.create_dataset('solution', data=self.cache[integ.case_id][...,:integ.n_solnvars])
+                subgroup.create_dataset('gradients', data=self.cache[integ.case_id][...,integ.n_solnvars:])
+                subgroup.create_dataset('coordinates', data=integ.mesh_coords)
+                #f.create_dataset(integ.case_id, data=self.cache[integ.case_id])
 
     def _snapshot_shape(self, integ):
         return (integ.mesh_coords_shape[0], integ.n_solnvars*(1+integ.n_spatialdims))
