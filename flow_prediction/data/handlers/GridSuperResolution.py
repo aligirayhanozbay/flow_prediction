@@ -46,9 +46,13 @@ class GridSuperResolution(BasePyFRDatahandler):
     def _snapshot_shape(self, integ=None):
         return self.high_res_gridsize
 
-    def _record_snapshots(self, tidx):
-        for integ in self.integrators:
-            self.cache[integ.case_id][tidx] = self._grads_to_vorticity(integ.interpolate_soln(self.high_res_grid_coords, gradients = True)).reshape(*self.high_res_gridsize)
+    #@staticmethod
+    def _get_snapshot(self,integ):
+        return self._grads_to_vorticity(integ.interpolate_soln(self.high_res_grid_coords, gradients = True, method='cubic')).reshape(*self.high_res_gridsize)
+
+    #def _record_snapshots(self, tidx):
+    #    for integ in self.integrators:
+    #        self.cache[integ.case_id][tidx] = 
 
     def save(self, path = None):
         if path is None:

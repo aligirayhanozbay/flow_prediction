@@ -6,6 +6,7 @@ import subprocess
 import numpy as np
 import secrets
 import h5py
+import multiprocessing
 
 from ..utils.PyFRIntegratorHandler import PyFRIntegratorHandler
 from ..geometry.bezier_shapes.shapes_utils import Shape
@@ -113,7 +114,7 @@ class BasePyFRDatahandler:
         if (n_bezier > 0) and (self.bezier_config is not None):
             cfg_iterator = itertools.repeat(pyfr_configs if isinstance(pyfr_configs,str) else pyfr_configs[0], n_bezier)
             backend_iterator = itertools.repeat(backend, n_bezier)
-            integ_ids = [next(self.device_placement_counter) for _ in mesh_files]
+            integ_ids = [next(self.device_placement_counter) for _ in range(n_bezier)]
 
             integs = []
             for c,b,i in zip(cfg_iterator, backend_iterator, integ_ids):
@@ -201,11 +202,38 @@ class BasePyFRDatahandler:
         for integ in self.integrators:
             integ.advance_to(t)
 
-    def _record_snapshots(self, tidx):
+    @staticmethod
+    def _get_snapshot(integ):
         #overload this to record different quantities
-        for integ in self.integrators:
-            self.cache[integ.case_id][tidx,...,:integ.n_solnvars] = integ.concatenated_soln(gradients=False).transpose(1,0)
-            self.cache[integ.case_id][tidx,...,integ.n_solnvars:] = integ.concatenated_soln(gradients=True).transpose(1,0)
+        solns = integ.concatenated_soln(gradients=False).transpose(1,0)
+        grads = integ.concatenated_soln(gradients=True).transpose(1,0)
+        return np.concatenate([solns,grads],-1)
+
+    #@staticmethod
+    def _get_snapshot_wrap(self, integ, queue):
+        snapshot = self._get_snapshot(integ)
+        queue.put((integ.case_id,snapshot))
+
+    def _record_snapshots(self, tidx):
+        q = multiprocessing.Queue()
+        processes = []
+        for idx, integ in enumerate(self.integrators):
+            p = multiprocessing.Process(target=self._get_snapshot_wrap, args=[integ, q])
+            p.start()
+            processes.append(p)
+        for p in processes:
+            r = q.get()
+            self.cache[r[0]][tidx] = r[1]
+        for p in processes:
+            p.join()
+        #with concurrent.futures.ProcessPoolExecutor() as executor:
+        #    snapshots = list(executor.map(self._get_snapshot, self.integrators))
+        #for snapshot, integ in zip(snapshots, self.integrators):
+        #    self.cache[integ.case_id][tidx] = snapshot
+        
+        #for integ in self.integrators:
+        #    self.cache[integ.case_id][tidx,...,:integ.n_solnvars] = 
+        #    self.cache[integ.case_id][tidx,...,integ.n_solnvars:] = 
         
     def generate_data(self):
         for tidx, t in enumerate(self.sample_times):
