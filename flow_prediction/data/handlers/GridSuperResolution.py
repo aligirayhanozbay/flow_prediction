@@ -13,7 +13,7 @@ class GridSuperResolution(BasePyFRDatahandler):
         self.high_res_grid_coords = self._generate_grid(grid_extent, high_res_gridsize)
         self.high_res_gridsize = high_res_gridsize
 
-        downsample_factor = [int(downsample_factor) for _ in self.high_res_gridsize] if (not hasattr(downsample_factor, '__getitem__')) else [int(downsample_factor) for d in downsample_factor]
+        downsample_factor = [int(downsample_factor) for _ in self.high_res_gridsize] if (not hasattr(downsample_factor, '__getitem__')) else [int(d) for d in downsample_factor]
         self._downsampling_slice = tuple([Ellipsis] + [slice(None,None,d) for d in downsample_factor])
 
         super().__init__(**base_args)
@@ -40,7 +40,7 @@ class GridSuperResolution(BasePyFRDatahandler):
         downsampled_inp = inp[self._downsampling_slice]
         if self.inputs_retain_shape:
             for dim in range(2,2+len(self.high_res_gridsize)):
-                downsampled_inp = downsampled_inp.repeat(self._downsampling_slice[-1].step, axis=dim)
+                downsampled_inp = downsampled_inp.repeat(self._downsampling_slice[dim-1].step, axis=dim)
         return downsampled_inp
 
     def _snapshot_shape(self, integ=None):
