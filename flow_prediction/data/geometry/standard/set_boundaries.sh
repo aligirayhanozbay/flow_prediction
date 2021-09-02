@@ -12,10 +12,9 @@ args=("$@")
 counter=0
 for arg in "$@"
 do
-	echo ${counter}
 	if [[ $counter -lt 4 ]]
 	then
-		echo 'skipped'
+		:
 	else
 		set_boundary ${arg} ${args[0]} ${args[1]} ${args[2]} ${args[3]}
 	fi
