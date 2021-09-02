@@ -7,6 +7,7 @@ import numpy as np
 import secrets
 import h5py
 import multiprocessing
+import glob
 
 from ..utils.PyFRIntegratorHandler import PyFRIntegratorHandler
 from ..geometry.bezier_shapes.shapes_utils import Shape
@@ -98,6 +99,7 @@ class BasePyFRDatahandler:
         ###################
         self.integrators = []
         #integrators for specified mesh files
+        mesh_files = list(itertools.chain.from_iterable([glob.glob(fname) for fname in mesh_files]))
         case_ids = [None for _ in mesh_files] if case_ids is None else case_ids
         if mesh_files is not None and pyfr_configs is not None:
             integ_ids = [next(self.device_placement_counter) for _ in mesh_files]
