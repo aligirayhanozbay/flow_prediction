@@ -130,3 +130,8 @@ dmypy.json
 
 # emacs
 *~
+
+#other output files
+*.msh
+*.h5
+
