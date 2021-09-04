@@ -4,10 +4,10 @@ import concurrent.futures
 import itertools
 import subprocess
 import numpy as np
-import secrets
 import h5py
 import multiprocessing
 import glob
+import warnings
 
 from ..utils.PyFRIntegratorHandler import PyFRIntegratorHandler
 from ..geometry.bezier_shapes.shapes_utils import Shape
@@ -106,7 +106,7 @@ class BasePyFRDatahandler:
         self.integrators = []
         #integrators for specified mesh files
         mesh_files = list(itertools.chain.from_iterable([glob.glob(fname) for fname in mesh_files]))
-        case_ids = [None for _ in mesh_files] if case_ids is None else case_ids
+        case_ids = self._handle_case_ids(case_ids, mesh_files)
         if mesh_files is not None and pyfr_configs is not None:
             integ_ids = [next(self.device_placement_counter) for _ in mesh_files]
 
@@ -117,7 +117,7 @@ class BasePyFRDatahandler:
         elif (mesh_files is not None) ^ (pyfr_configs is not None):
             raise(ValueError('Both mesh files and PyFR config files must be supplied'))
         #integrators for randomly generated Bezier geometry cases
-        self.bezier_case_prefix = bezier_case_prefix if bezier_case_prefix is not None else 'bezier_'
+        self.bezier_case_prefix = bezier_case_prefix if bezier_case_prefix is not None else 'shape_'
         self.bezier_config = self._merge_bezier_opts(bezier_config)
         if (n_bezier > 0) and (self.bezier_config is not None):
             cfg_iterator = itertools.repeat(pyfr_configs if isinstance(pyfr_configs,str) else pyfr_configs[0], n_bezier)
@@ -125,7 +125,6 @@ class BasePyFRDatahandler:
             integ_ids = [next(self.device_placement_counter) for _ in range(n_bezier)]
 
             integs = []
-            import pdb; pdb.set_trace()
             for c,b,i in zip(cfg_iterator, backend_iterator, integ_ids):
                 integs.append(self._create_bezier_integrator(c,b,i))
             self.integrators = self.integrators + list(integs)
@@ -153,7 +152,6 @@ class BasePyFRDatahandler:
         self._preallocate_caches()
 
     def _merge_bezier_opts(self, user_opts):
-        import pdb; pdb.set_trace()
         if user_opts is None:
             return self.bezier_default_opts
         else:
@@ -161,6 +159,26 @@ class BasePyFRDatahandler:
             for field in self.bezier_default_opts:
                 merged_opts[field] = {**(self.bezier_default_opts[field]), **(user_opts.get(field, {}))}
             return merged_opts
+
+    @staticmethod
+    def _handle_case_ids(case_ids, mesh_files):
+        if case_ids is None:
+            _basenames_noext = list(map(lambda x: os.path.splitext(os.path.basename(x))[0], mesh_files))
+            if len(list(set(_basenames_noext))) < len(_basenames_noext):
+                warnings.warn('Some mesh files have identical base names - copies will get random case ids. Remove meshes with duplicate names, or specify case_ids manually to avoid this.')
+                encountered_names = []
+                new_case_ids = []
+                for basename in _basenames_noext:
+                    if basename in new_case_ids:
+                        new_case_ids.append(None)
+                    else:
+                        new_case_ids.append(basename)
+                        encountered_names.append(basename)
+            else:
+                new_case_ids = _basenames_noext
+            return new_case_ids
+        else:
+            return case_ids
 
     def __del__(self):
         for integ in self.integrators:
@@ -208,7 +226,6 @@ class BasePyFRDatahandler:
         else:
             device_id = None
         mesh_file_path = self._handle_mesh_file(mesh)
-        print(mesh_file_path)
         return PyFRIntegratorHandler(mesh_file_path, config_path, backend = backend, device_id = device_id, case_id = case_id)
 
     def _create_bezier_integrator(self, config_path, backend, integrator_id = None):
@@ -216,7 +233,7 @@ class BasePyFRDatahandler:
         shape.generate(**self.bezier_config['generate'])
         mesh_file_path, n_eles = shape.mesh(**self.bezier_config['mesh'])
         print(f'Meshed {mesh_file_path} with {n_eles} elements')
-        case_id = self.bezier_case_prefix + secrets.token_hex(4)
+        case_id = self.bezier_case_prefix + str(shape.index)
         return self.create_integrator_handler(mesh_file_path, config_path, backend, integrator_id = integrator_id, case_id = case_id)
 
     def advance_to(self, t):
