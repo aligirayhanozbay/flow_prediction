@@ -25,12 +25,18 @@ class BasePyFRDatahandler:
             'edgy': [1.0]
         },
         'mesh':{
+            'mesh_domain': True,
             'xmin': -10.0,
             'xmax': 25.0,
             'ymin': -10.0,
             'ymax': 10.0
         },
-        'magnify': 1.0
+        'generate':{
+            'magnify': 1.0,
+            'cylinder': False,
+            'centering': True,
+            'ccws': True
+        }
     }
     device_placement_counter = itertools.count()
     def __init__(self, mesh_files = None, case_ids = None, pyfr_configs = None, n_bezier = 0, bezier_config = None, bezier_case_prefix = None, load_cached = False, force_remesh = False, keep_directories_clean = True, backend = None, auto_device_placement = False, sample_times = None):
@@ -112,13 +118,14 @@ class BasePyFRDatahandler:
             raise(ValueError('Both mesh files and PyFR config files must be supplied'))
         #integrators for randomly generated Bezier geometry cases
         self.bezier_case_prefix = bezier_case_prefix if bezier_case_prefix is not None else 'bezier_'
-        self.bezier_config = self.bezier_default_opts if bezier_config is None else {**self.bezier_default_opts,**bezier_config}
+        self.bezier_config = self._merge_bezier_opts(bezier_config)
         if (n_bezier > 0) and (self.bezier_config is not None):
             cfg_iterator = itertools.repeat(pyfr_configs if isinstance(pyfr_configs,str) else pyfr_configs[0], n_bezier)
             backend_iterator = itertools.repeat(backend, n_bezier)
             integ_ids = [next(self.device_placement_counter) for _ in range(n_bezier)]
 
             integs = []
+            import pdb; pdb.set_trace()
             for c,b,i in zip(cfg_iterator, backend_iterator, integ_ids):
                 integs.append(self._create_bezier_integrator(c,b,i))
             self.integrators = self.integrators + list(integs)
@@ -144,6 +151,16 @@ class BasePyFRDatahandler:
 
         #Preallocate solver cache
         self._preallocate_caches()
+
+    def _merge_bezier_opts(self, user_opts):
+        import pdb; pdb.set_trace()
+        if user_opts is None:
+            return self.bezier_default_opts
+        else:
+            merged_opts = {}
+            for field in self.bezier_default_opts:
+                merged_opts[field] = {**(self.bezier_default_opts[field]), **(user_opts.get(field, {}))}
+            return merged_opts
 
     def __del__(self):
         for integ in self.integrators:
@@ -191,12 +208,14 @@ class BasePyFRDatahandler:
         else:
             device_id = None
         mesh_file_path = self._handle_mesh_file(mesh)
+        print(mesh_file_path)
         return PyFRIntegratorHandler(mesh_file_path, config_path, backend = backend, device_id = device_id, case_id = case_id)
 
     def _create_bezier_integrator(self, config_path, backend, integrator_id = None):
         shape = Shape(**self.bezier_config['shape'])
-        shape.generate(self.bezier_config['magnify'])
-        mesh_file_path, _ = shape.mesh(mesh_domain = True,**self.bezier_config['mesh'])
+        shape.generate(**self.bezier_config['generate'])
+        mesh_file_path, n_eles = shape.mesh(**self.bezier_config['mesh'])
+        print(f'Meshed {mesh_file_path} with {n_eles} elements')
         case_id = self.bezier_case_prefix + secrets.token_hex(4)
         return self.create_integrator_handler(mesh_file_path, config_path, backend, integrator_id = integrator_id, case_id = case_id)
 
