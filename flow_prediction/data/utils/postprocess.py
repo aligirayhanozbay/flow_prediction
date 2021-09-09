@@ -169,6 +169,26 @@ def get_coordinates(raw_data):
     return [np.array(raw_data[case]['coordinates']) for case in raw_data]
 
 def postprocess_shallowdecoder(load_path, sensor_locations_z = None, sensor_placement_strategy_z = None, sensor_locations_w = None, sensor_placement_strategy_w = None, flowfield_sample_resolution = None, variables=None, mesh_folder = None, save_path=None, h5file_opts = None, verbose=False):
+    '''
+    Postprocess the raw pyfr simulation results to work with shallow decoder training.
+
+    Inputs:
+    -load_path: str. Path to the .h5 file containing the pyfr solutions.
+    -sensor_locations_z: np.array[Union[np.complex128, np.float64]]. Locations of the sparse sensors in the z-plane. Can either be a 1d array with complex values, or a 2d array of shape (n_sensors,2).
+    -sensor_placement_strategy_z: List[str]. How the sensors should be placed in the x- and y- directions, relative to the object vertices in the domain. First element determines the strategy in the x-dir and the second in the y-dir. Options are 'behind', 'above', 'centered', 'below', 'front', None. None takes the raw values.
+    -sensor_locations_w: Similar to sensor_locations_z, but in the annular domain. If a 2d input with shape (n_sensors,2) is given, this is interpreted as polar coordinates.
+    -sensor_placement_strategy_w: Similar to sensor_placement_strategy_z, but for the annular domain. Options are: 
+        'inner_relative': Chooses radial coordinate as the inner ring radius + given values
+        'outer_relative': Chooses radial coordinate as the outer ring radius - given values
+        'scaled': Expects values between 0.0 and 1.0. 0.0 corresponds to the inner ring and 1.0 to the outer.
+        None: Use raw values.
+    -flowfield_sample_resolution: List of 2 ints. How many gridpoints to use in the radial and angular directions to sample the ground truth flowfield.
+    -variables: List[Union[str, callable]]. Determines the quantities to extract from the raw flow variables. Default options are "p", "u", "v" and "vorticity". Any callable can be provided. Variable names will be recorded in the hdf5 from __name__ property.
+    -mesh_folder: str. Directory containing mesh files. Mesh files are required for computing the S-C mappings.
+    -save_path: str. Path to save the postprocessed data.
+    -h5file_opts: Dict. kwargs to h5py.File.
+    -verbose: bool. Prints progress information to stdout if True.
+    '''
     
     assert load_path != save_path
     
@@ -292,54 +312,3 @@ if __name__ == '__main__':
                                mesh_folder = args.mesh_folder,
                                verbose = args.verbose
                                )
-
-    '''
-    assert args.dataset != args.output_path
-    
-    import time
-    t0 = time.time()
-    raw_data = load_to_ram(args.dataset)
-    t1 = time.time()
-    ttaken = t1-t0
-    print(f'Loaded {args.dataset} in {ttaken} seconds')
-    mesh_fnames = [args.mesh_folder + case + '.msh' for case in raw_data]
-    soln_coords = [raw_data[case]['coordinates'] for case in raw_data]
-    soln_vals = [raw_data[case]['solution'] for case in raw_data]
-    
-
-    vel_sensors = np.array([0.15+0.1*1j, 0.30+0.1*1j, 0.15-0.1*1j, 0.3-0.1*1j])
-    vel_sensors_strategy = ['behind', 'centered']
-
-    n_pressure_sensors = 10
-    p_sensors = np.stack([np.zeros((n_pressure_sensors,)), np.linspace(0.0,2*np.pi,n_pressure_sensors)],-1)
-    p_sensors_strategy = ['inner_relative', None]
-
-    full_flowfield_sensors = np.stack(np.meshgrid(np.linspace(0.0,0.96,args.target_resolution[0]), np.linspace(0.0,2*np.pi,args.target_resolution[1]), indexing='ij'),-1).reshape(-1,2)
-
-    n_sensors = p_sensors.shape[0] + vel_sensors.shape[0]
-
-    sensor_locations_pfunc = functools.partial(get_sensor_locations, w_sensors = p_sensors, z_sensors = vel_sensors, z_placement_modes = vel_sensors_strategy, w_placement_modes = p_sensors_strategy)
-    full_flowfield_locations_pfunc = functools.partial(get_sensor_locations, w_sensors = full_flowfield_sensors, w_placement_modes = ['scaled', None])
-    
-    
-    vertices = get_vertices(mesh_fnames)
-    with concurrent.futures.ProcessPoolExecutor() as executor:
-        amaps = list(executor.map(get_maps, vertices))
-        sensor_locations = list(executor.map(sensor_locations_pfunc, amaps))
-        full_flowfield_locations = list(executor.map(full_flowfield_locations_pfunc, amaps))
-        sensor_locations_z, sensor_locations_w = list(zip(*sensor_locations))
-        full_flowfield_locations_z, full_flowfield_locations_w = list(zip(*full_flowfield_locations))
-        interpolated_values = list(executor.map(interpolate_to_sensors_and_full_flowfield, soln_vals, soln_coords, sensor_locations_z, full_flowfield_locations_z))
-    # interpolated_values = list(map(interpolate_to_sensors_and_full_flowfield, soln_vals, soln_coords, sensor_locations_z, full_flowfield_locations_z))
-    #sensor_locations = list(map(sensor_locations_pfunc, amaps))
-
-    with h5py.File(args.output_path, 'w') as f:
-        for case, slz, slw, ffz, ffw, (sensor_values,full_field_values) in zip(raw_data.keys(), sensor_locations_z, sensor_locations_w, full_flowfield_locations_z, full_flowfield_locations_w, interpolated_values):
-            grp = f.create_group(case)
-            grp.create_dataset('sensor_locations_z', data=slz)
-            grp.create_dataset('sensor_locations_w', data=slw)
-            grp.create_dataset('full_field_locations_z', data=ffz)
-            grp.create_dataset('full_field_locations_w', data=ffw)
-            grp.create_dataset('sensor_values', data = sensor_values)
-            grp.create_dataset('full_field_values', data = full_field_values)
-    '''
