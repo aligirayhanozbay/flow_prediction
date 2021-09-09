@@ -5,7 +5,6 @@ import concurrent.futures
 import copy
 import functools
 import scipy.interpolate
-import scipy.spatial
 
 from test_maps import get_vertices, get_maps
 
@@ -124,6 +123,7 @@ if __name__ == '__main__':
     parser.add_argument('dataset', type=str)
     parser.add_argument('output_path', type=str)
     parser.add_argument('--target-resolution', nargs = 2, type=int, default=(50,200))
+    parser.add_argument('--mesh_folder', type=str, default='./')
     args = parser.parse_args()
 
     assert args.dataset != args.output_path
@@ -134,7 +134,7 @@ if __name__ == '__main__':
     t1 = time.time()
     ttaken = t1-t0
     print(f'Loaded {args.dataset} in {ttaken} seconds')
-    mesh_fnames = [case + '.msh' for case in raw_data]
+    mesh_fnames = [args.mesh_folder + case + '.msh' for case in raw_data]
     soln_coords = [raw_data[case]['coordinates'] for case in raw_data]
     soln_vals = [raw_data[case]['solution'] for case in raw_data]
     

@@ -1,5 +1,5 @@
 import pathlib
-from ...data.handlers.base import BasePyFRDatahandler
+from ...data.handlers.generation.base import BasePyFRDatahandler
 
 current_dir = str(pathlib.Path(__file__).parent.resolve())
 

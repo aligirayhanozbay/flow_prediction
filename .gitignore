@@ -134,4 +134,5 @@ dmypy.json
 #other output files
 *.msh
 *.h5
-
+*.png
+DSCPACK*
