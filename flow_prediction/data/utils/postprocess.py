@@ -9,35 +9,6 @@ import scipy.interpolate
 
 from .mapping import get_vertices, get_maps
 
-# def rewrite_to_disk(data, target_path):
-#     #pointless code to copy h5py file essentially. dont actually use.
-#     newfile = h5py.File(target_path, 'w')
-#     for groupname in data:
-#         newfile.create_group(groupname)
-#         for dataname in data[groupname]:
-#             newfile[groupname].create_dataset(dataname, data=data[groupname][dataname])
-#             print(f'Written {groupname}/{dataname} to {target_path}')
-#     newfile.close()
-    
-# def _load_single_subgroup(h5path, subgroup, verbose = False):
-#     subgroup_as_dict = {}
-#     with h5py.File(h5path, 'r') as f:
-#         for k in f[subgroup].keys():
-#             if verbose:
-#                 print(f'Reading {k} in {subgroup} from {h5path}')
-#             subgroup_as_dict[k] = np.array(f[subgroup][k])
-#         #subgroup_as_dict = {k:np.array(f[subgroup][k]) for k in f[subgroup].keys()}
-#     return subgroup_as_dict
-
-# def load_to_ram(h5path):
-#     f = h5py.File(h5path, 'r')
-#     subgroup_names = list(f.keys())
-#     f.close()
-
-#     with concurrent.futures.ThreadPoolExecutor() as executor:
-#         subgroup_values = list(executor.map(_load_single_subgroup, itertools.repeat(h5path, len(subgroup_names)), subgroup_names))
-#     return {k:v for k,v in zip(subgroup_names, subgroup_values)}
-
 def generate_grid(amap, **kwargs):
     return amap._generate_annular_grid(**kwargs)
 
