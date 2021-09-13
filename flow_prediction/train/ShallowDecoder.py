@@ -20,13 +20,13 @@ output_units = dummy_output.shape[-1]
 del dummy_input, dummy_output
 
 callbacks = [
-    tf.keras.callbacks.ReduceLROnPlateau(),
+    tf.keras.callbacks.ReduceLROnPlateau(patience = config['training']['reduce_lr_patience'], verbose=True),
     tf.keras.callbacks.ModelCheckpoint(args.checkpoint_path, save_best_only=True),
-    tf.keras.callbacks.EarlyStopping(patience = 2)
+    tf.keras.callbacks.EarlyStopping(patience = config['training']['early_stopping_patience'], verbose=True)
 ]
 
 distribute_strategy =  tf.distribute.MirroredStrategy()
 with distribute_strategy.scope():
     model = original_shallow_decoder(input_units, output_units, learning_rate = config['training'].get('learning_rate', 1e-3), **config['model'])
-    model.fit(train_dataset, epochs = config['training']['epochs'], validation_data = test_dataset, validation_steps = config['training'].get('validation_steps', None), callbacks = callbacks)
+    model.fit(train_dataset, epochs = config['training']['epochs'], validation_data = test_dataset, callbacks = callbacks)
 
