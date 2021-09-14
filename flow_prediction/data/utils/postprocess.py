@@ -9,6 +9,8 @@ import scipy.interpolate
 
 from .mapping import get_vertices, get_maps
 
+_real_dtypes = [np.float32, np.float64, np.float16, np.int64, np.int32, np.int16, np.int8]
+
 def generate_grid(amap, **kwargs):
     return amap._generate_annular_grid(**kwargs)
 
@@ -45,21 +47,19 @@ def _parse_w_placement_modes(placement_modes):
     return placement_modes
 
 def get_sensor_locations(annulusmap, z_sensors=None, w_sensors=None, z_placement_modes = None, w_placement_modes = None, forward_map_opts = None, backward_map_opts = None):
-    real_dtypes = [np.float32, np.float64, np.float16, np.int64, np.int32, np.int16, np.int8]
+    
     vertices = annulusmap.mapping_params['inner_polygon_vertices']
-    # if isinstance(z_sensors,np.ndarray) and len(z_sensors.shape) == 2 and z_sensors.shape[1] == 2 and (z_sensors.dtype in real_dtypes):
-    #     z_sensors = z_sensors[:,0] + 1j*z_sensors[:,1]
-    # import pdb; pdb.set_trace()
+    
     if z_sensors is not None:
         z_placement_modes = _parse_z_placement_modes(z_placement_modes)
-        z_sensors = z_placement_modes[0](np.real(vertices)) + z_placement_modes[1](np.imag(vertices)) + z_sensors
+        z_sensors = z_placement_modes[0](np.real(vertices)) + 1j*z_placement_modes[1](np.imag(vertices)) + z_sensors
         z_sensors_projected = annulusmap.backward_map(z_sensors)
     else:
         z_sensors = np.zeros((0,), dtype=np.complex128)
         z_sensors_projected = np.zeros((0,), dtype=np.complex128)
 
     if w_sensors is not None:
-        if w_sensors.dtype in real_dtypes:
+        if w_sensors.dtype in _real_dtypes:
             if len(w_sensors.shape) == 2 and w_sensors.shape[1] == 2:
                 w_placement_modes = _parse_w_placement_modes(w_placement_modes)
                 w_sensors[:,0] = w_placement_modes[0](w_sensors[:,0], annulusmap.mapping_params['inner_radius'])
@@ -176,8 +176,8 @@ def postprocess_shallowdecoder(load_path, sensor_locations_z = None, sensor_plac
         total_tasks = 6 if save_path is None else 7
         print(f'[{taskcounter}/{total_tasks}] Loaded solution coordinates and field variables {variables}')
 
-    if len(sensor_locations_z.shape) > 1:
-        sensor_locations_z = np.real(sensor_locations_z[:,0]) + np.imag(sensor_locations_z[:,1])
+    if (len(sensor_locations_z.shape) == 2) and (sensor_locations_z.shape[1] == 2) and (sensor_locations_z.dtype in _real_dtypes):
+        sensor_locations_z = sensor_locations_z[:,0] + 1j*sensor_locations_z[:,1]
     #not doing this check for w as the inputs may be given in polar form
 
     full_flowfield_sensors = np.stack(np.meshgrid(np.linspace(0.0,0.96,flowfield_sample_resolution[0]), np.linspace(0.0,2*np.pi,flowfield_sample_resolution[1]), indexing='ij'),-1).reshape(-1,2)
@@ -195,7 +195,7 @@ def postprocess_shallowdecoder(load_path, sensor_locations_z = None, sensor_plac
         if verbose:
             taskcounter += 1
             print(f'[{taskcounter}/{total_tasks}] Computed conformal mappings')
-            
+        
         sensor_locations = list(executor.map(sensor_locations_pfunc, amaps))
         if verbose:
             taskcounter += 1
@@ -245,7 +245,7 @@ def _load_sensor_coords(v):
     return v  
 
 def _load_sensors(cfg_path):
-    if os.path.splitext(cfg_path)[1] == 'json':
+    if os.path.splitext(cfg_path)[1] == '.json':
         import json
         sensor_config = json.load(open(cfg_path, 'r'))
     else:
