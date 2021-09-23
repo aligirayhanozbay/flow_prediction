@@ -5,7 +5,7 @@ element_scale = 3;
 // Dimensions
 inner_cir_rad = 0.5;
 outer_cir_rad = 1.5;
-xmax = 25;
+xmax = 10;
 xmin = -10;
 ymax = 10;
 ymin = -10;

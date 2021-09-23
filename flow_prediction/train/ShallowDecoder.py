@@ -19,11 +19,11 @@ input_units = dummy_input.shape[-1]
 output_units = dummy_output.shape[-1]
 del dummy_input, dummy_output
 
-callbacks = [
-    tf.keras.callbacks.ReduceLROnPlateau(patience = config['training']['reduce_lr_patience'], verbose=True),
-    tf.keras.callbacks.ModelCheckpoint(args.checkpoint_path, save_best_only=True),
-    tf.keras.callbacks.EarlyStopping(patience = config['training']['early_stopping_patience'], verbose=True)
-]
+callbacks = [tf.keras.callbacks.ModelCheckpoint(args.checkpoint_path, save_best_only=True)]
+if 'reduce_lr' in config['training']:
+    callbacks.append(tf.keras.callbacks.ReduceLROnPlateau(**config['training']['reduce_lr']))
+if 'early_stopping' in config['training']:
+    callbacks.append(tf.keras.callbacks.EarlyStopping(**config['training']['early_stopping']))
 
 distribute_strategy =  tf.distribute.MirroredStrategy()
 with distribute_strategy.scope():

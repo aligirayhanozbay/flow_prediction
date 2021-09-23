@@ -140,7 +140,6 @@ class BasePyFRDatahandler:
         else:
             sample_times = np.array(sample_times)
         self.sample_times = sample_times#keeps track of the physical times to compute the soln at
-        #self._computed_timestep_mask = np.zeros(self.sample_times.shape, dtype=np.bool)#self._computed_timestep_mask[i] keeps track of whether the solution has been recorded already at t=self.sample_times[i]
 
         ###################
         #Create solver child processes, without starting the solution process
@@ -302,3 +301,48 @@ class BasePyFRDatahandler:
 
     def __getitem__(self, idx=None):
         raise(NotImplementedError)
+
+
+if __name__ == '__main__':
+    import argparse
+    import json
+    parser = argparse.ArgumentParser('Generate raw solution data with PyFR')
+    parser.add_argument('--save_path', type=str, help='path to the output file')
+    parser.add_argument('--pyfr_configs', nargs = '*', type=str, help='config(s) for the pyfr simulations. provide 1 config to use with all simulations.')
+    parser.add_argument('--meshes', nargs='*', type=str, help='paths to the mesh files', default=[])
+    parser.add_argument('--n_bezier', type=int, default=0, help='# of randomly generated bezier geometries')
+    parser.add_argument('--bezier_cfg', type=str, default=None, help='path to a json file conatining the config for bezier shape generation and meshing')
+    parser.add_argument('--backend', type=str, default='openmp', help="'cuda', 'opencl', 'openmp' or 'hip'")
+    parser.add_argument('--sample_times', nargs=3, type=float, help='3 floats for start stop step', default = [5.0,120.0,0.25])
+    parser.add_argument('--no-auto-device-placement', action='store_false')
+    args = parser.parse_args()
+
+    if args.bezier_cfg is not None:
+        bezier_cfg = json.load(open(args.bezier_cfg,'r'))
+    else:
+        bezier_cfg = None
+    if len(args.pyfr_configs) == 1:
+        args.pyfr_configs = args.pyfr_configs[0]
+
+    dh = BasePyFRDatahandler(
+        mesh_files = args.meshes,
+        pyfr_configs = args.pyfr_configs,
+        n_bezier = args.n_bezier,
+        backend = args.backend,
+        auto_device_placement = args.no_auto_device_placement,
+        sample_times = args.sample_times,
+        bezier_config = bezier_cfg,
+    )
+
+    print(f'Running cases: {[i.case_id for i in dh.integrators]}')
+
+    dh.generate_data()
+
+    dh.save(args.save_path)
+
+    del dh
+    
+    
+    
+    
+    

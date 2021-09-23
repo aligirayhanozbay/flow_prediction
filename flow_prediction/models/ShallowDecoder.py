@@ -1,6 +1,6 @@
 import tensorflow as tf
 
-def original_shallow_decoder(input_layer_shape, output_layer_size, learning_rate, hidden_layer_units = None, hidden_layer_activations = None, normalization = None, l2_regularization = 0.0):
+def original_shallow_decoder(input_layer_shape, output_layer_size, learning_rate, hidden_layer_units = None, hidden_layer_activations = None, normalization = None, l2_regularization = 0.0, loss_function = None, metrics = None):
 
     if hidden_layer_units is None:
         hidden_layer_units = [40,40]
@@ -39,12 +39,13 @@ def original_shallow_decoder(input_layer_shape, output_layer_size, learning_rate
     optimiser = tf.keras.optimizers.Adam(learning_rate=learning_rate)
 
     # Defining losses
-    losses = tf.keras.losses.MeanSquaredError()
+    if loss_function is None:
+        loss_function = tf.keras.losses.MeanSquaredError()
 
     # Defining metrics
-    metrics = tf.keras.metrics.MeanAbsoluteError()
+    #metrics = tf.keras.metrics.MeanAbsoluteError()
 
-    model.compile(optimizer=optimiser, loss=losses, metrics=metrics)
+    model.compile(optimizer=optimiser, loss=loss_function, metrics=metrics)
 
     return model
 
