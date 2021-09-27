@@ -6,6 +6,7 @@ import copy
 import functools
 import os
 import scipy.interpolate
+from tqdm import tqdm
 
 from .mapping import get_vertices, get_maps
 
@@ -117,20 +118,54 @@ class _get_field_var_vorticity(_field_var_computation):
     @staticmethod
     def __call__(case):
         return case['gradients'][...,4]-case['gradients'][...,3]
-    
 
-def get_field_variables(raw_data, variables):
+class _get_field_var_dudt(_field_var_computation):
+    __name__ = 'dudt'
+    varidx = 1
+
+    def __init__(self,dt):
+        self.dt = dt
+        
+    def _get_time_derivative_at_first_snapshot(self,case):
+        ddt = np.array(case['solution'][1,...,self.varidx] - case['solution'][0,...,self.varidx])/self.dt
+        return np.expand_dims(ddt,0)
+
+    def _get_time_derivative_at_last_snapshot(self,case):
+        ddt = np.array(case['solution'][-1,...,self.varidx] - case['solution'][-2,...,self.varidx])/self.dt
+        return np.expand_dims(ddt,0)
+
+    def _get_time_derivative_at_intermediate_snapshots(self,case):
+        return np.array(case['solution'][2:,...,self.varidx] - case['solution'][0:-2,...,self.varidx])/(2*self.dt)
+    
+    def __call__(self,case):
+        ddt_initial = self._get_time_derivative_at_first_snapshot(case)
+        ddt_final = self._get_time_derivative_at_last_snapshot(case)
+        ddt_intermediate = self._get_time_derivative_at_intermediate_snapshots(case)
+        ddt = np.concatenate([ddt_initial,ddt_intermediate,ddt_final],0)
+        return ddt
+
+class _get_field_var_dvdt(_get_field_var_dudt):
+    __name__ = 'dvdt'
+    varidx = 2
+
+def get_field_variables(raw_data, variables, dt=1.0, verbose=False):
     #variables: List[Union[str,callable]]. Names of variables. Currently s
-    field_var_map = {'p': _get_field_var_p(), 'u': _get_field_var_u(), 'v': _get_field_var_v(), 'vorticity': _get_field_var_vorticity()}
+    field_var_map = {'p': _get_field_var_p(), 'u': _get_field_var_u(), 'v': _get_field_var_v(), 'vorticity': _get_field_var_vorticity(), 'dudt': _get_field_var_dudt(dt=dt), 'dvdt': _get_field_var_dvdt(dt=dt)}
     variables = copy.deepcopy(variables)
     for k in range(len(variables)):
         if not callable(variables[k]):
             variables[k] = field_var_map[variables[k]]
 
     field_vals = []
-    for case in raw_data:
+    case_names = list(raw_data.keys())
+    if verbose:
+        print('Loading field variables')
+        case_names = tqdm(list(case_names))
+        
+    for case in case_names:
          field_val = np.stack([get_var(raw_data[case]) for get_var in variables],-1)
          field_vals.append(field_val)
+         
 
     variable_names = [v.__name__ for v in variables]
 
@@ -139,7 +174,7 @@ def get_field_variables(raw_data, variables):
 def get_coordinates(raw_data):
     return [np.array(raw_data[case]['coordinates']) for case in raw_data]
 
-def postprocess_shallowdecoder(load_path, sensor_locations_z = None, sensor_placement_strategy_z = None, sensor_locations_w = None, sensor_placement_strategy_w = None, flowfield_sample_resolution = None, variables=None, mesh_folder = None, save_path=None, h5file_opts = None, verbose=False):
+def postprocess_shallowdecoder(load_path, sensor_locations_z = None, sensor_placement_strategy_z = None, sensor_locations_w = None, sensor_placement_strategy_w = None, flowfield_sample_resolution = None, variables=None, mesh_folder = None, save_path=None, h5file_opts = None, verbose=False, nprocs = None, dt=1.0):
     '''
     Postprocess the raw pyfr simulation results to work with shallow decoder training.
 
@@ -159,6 +194,8 @@ def postprocess_shallowdecoder(load_path, sensor_locations_z = None, sensor_plac
     -save_path: str. Path to save the postprocessed data.
     -h5file_opts: Dict. kwargs to h5py.File.
     -verbose: bool. Prints progress information to stdout if True.
+    -nprocs: int. Number of worker processes.
+    -dt: float. Time step for computing time derivatives. If not supplied, a timestep of 1.0 will be assumed so you may have to manually divide the values by the actual dt later instead.
     '''
     
     assert load_path != save_path
@@ -170,7 +207,7 @@ def postprocess_shallowdecoder(load_path, sensor_locations_z = None, sensor_plac
 
     soln_coords = get_coordinates(raw_data)
     variables = ['p','u','v'] if variables is None else variables
-    soln_vals, variable_names = get_field_variables(raw_data, variables)
+    soln_vals, variable_names = get_field_variables(raw_data, variables, dt=dt, verbose=verbose)
     if verbose:
         taskcounter = 1
         total_tasks = 6 if save_path is None else 7
@@ -184,13 +221,13 @@ def postprocess_shallowdecoder(load_path, sensor_locations_z = None, sensor_plac
         
     sensor_locations_pfunc = functools.partial(get_sensor_locations, w_sensors = sensor_locations_w, z_sensors = sensor_locations_z, z_placement_modes = sensor_placement_strategy_z, w_placement_modes = sensor_placement_strategy_w)
     full_flowfield_locations_pfunc = functools.partial(get_sensor_locations, w_sensors = full_flowfield_sensors, w_placement_modes = ['scaled', None])
-
+    
     vertices = get_vertices(mesh_fnames)
     if verbose:
         taskcounter += 1
         print(f'[{taskcounter}/{total_tasks}] Obtained object vertex coordinates')
-    
-    with concurrent.futures.ProcessPoolExecutor() as executor:
+
+    with concurrent.futures.ProcessPoolExecutor(max_workers=nprocs) as executor:
         amaps = list(executor.map(get_maps, vertices))
         if verbose:
             taskcounter += 1
@@ -219,7 +256,7 @@ def postprocess_shallowdecoder(load_path, sensor_locations_z = None, sensor_plac
             for k,varname in enumerate(variable_names):
                 f.attrs['variable' + str(k)] = varname.encode('utf-8')
                 
-            for case, slz, slw, ffz, ffw, (sensor_values,full_field_values) in zip(raw_data.keys(), sensor_locations_z, sensor_locations_w, full_flowfield_locations_z, full_flowfield_locations_w, interpolated_values):
+            for case, amap, slz, slw, ffz, ffw, (sensor_values,full_field_values) in zip(raw_data.keys(), amaps, sensor_locations_z, sensor_locations_w, full_flowfield_locations_z, full_flowfield_locations_w, interpolated_values):
                 grp = f.create_group(case)
                 grp.create_dataset('sensor_locations_z', data=slz)
                 grp.create_dataset('sensor_locations_w', data=slw)
@@ -227,6 +264,8 @@ def postprocess_shallowdecoder(load_path, sensor_locations_z = None, sensor_plac
                 grp.create_dataset('full_field_locations_w', data=ffw)
                 grp.create_dataset('sensor_values', data = sensor_values)
                 grp.create_dataset('full_field_values', data = full_field_values)
+                grp_amap = grp.create_group('amap')
+                amap.export_mapping_params_h5(grp_amap)
         if verbose:
             taskcounter += 1
             print(f"[{taskcounter}/{total_tasks}] Saved result")
@@ -268,6 +307,8 @@ if __name__ == '__main__':
     parser.add_argument('--mesh_folder', type=str, default='./', help = 'Directory containing mesh files. Mesh files are required for computing the S-C mappings.')
     parser.add_argument('--variables', nargs='*', default=['p','u','v'], help = 'Names of the variables to extract from the .h5 file. Current options are: p, u, v, vorticity')
     parser.add_argument('--verbose', action='store_true')
+    parser.add_argument('--nprocs', type=int, default=None, help='Limit the number of workers. May be useful in memory startved situations.')
+    parser.add_argument('--dt', type=float, default=1.0, help='Time step for computing time derivatives. If not supplied, a timestep of 1.0 will be assumed so you may have to manually divide the values by the actual dt later instead.')
     args = parser.parse_args()
     
     (z_sensor_strategy, z_sensor_coords), (w_sensor_strategy, w_sensor_coords) = _load_sensors(args.sensor_config)
@@ -281,5 +322,7 @@ if __name__ == '__main__':
                                flowfield_sample_resolution = args.target_resolution,
                                variables = args.variables,
                                mesh_folder = args.mesh_folder,
-                               verbose = args.verbose
+                               verbose = args.verbose,
+                               nprocs = args.nprocs,
+                               dt = args.dt
                                )
