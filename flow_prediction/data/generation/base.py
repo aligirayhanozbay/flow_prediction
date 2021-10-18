@@ -39,7 +39,7 @@ class BasePyFRDatahandler:
         }
     }
     device_placement_counter = itertools.count()
-    def __init__(self, mesh_files = None, case_ids = None, pyfr_configs = None, n_bezier = 0, bezier_config = None, bezier_case_prefix = None, load_cached = False, force_remesh = False, keep_directories_clean = True, backend = None, auto_device_placement = False, sample_times = None):
+    def __init__(self, mesh_files = None, case_ids = None, pyfr_configs = None, n_bezier = 0, bezier_config = None, bezier_case_prefix = None, load_cached = False, force_remesh = False, keep_directories_clean = True, backend = None, auto_device_placement = False, sample_times = None, residuals_folder = None, residuals_frequency = 20):
         '''
         -mesh_files: List[str]. Paths to .geo/.msh/.pyfrm files.
         -case_ids: List[str]. Case ID to assign to each solver in mesh_files. 
@@ -51,11 +51,13 @@ class BasePyFRDatahandler:
         -keep_directories_clean: bool. If True, all new generated .msh/.pyfrm files will be created in /tmp/.
         -backend: str. PyFR backend to use. Defaults to openmp (i.e. CPU).
         -auto_device_placement: bool, int, List[int] or Dict[int,float]. False follows default pyfr behaviour based on the ini. True to automatically place each new created solver on different devices in a round-robin fashion. List of integers to use the specified device IDs round-robin. If a dict, the keys are the device ids to be used and the corresponding float value assigns a weight - e.g. {0:0.25, 1:0.75} with 4 solvers will assign 1 to device 0 and 3 to device 1. Does nothing for openmp backend.
-        -sample_times
+        -sample_times: List of 3 floats. Start, stop and step for snapshots' times.
         '''
         backend = 'openmp' if backend is None else backend
         self.force_remesh = force_remesh
         self.keep_directories_clean = keep_directories_clean
+        self.residuals_folder = residuals_folder
+        self.residuals_frequency = residuals_frequency
         
         ###################
         #Auto device placement code
@@ -225,7 +227,8 @@ class BasePyFRDatahandler:
         else:
             device_id = None
         mesh_file_path = self._handle_mesh_file(mesh)
-        return PyFRIntegratorHandler(mesh_file_path, config_path, backend = backend, device_id = device_id, case_id = case_id)
+        residuals_path = self.residuals_folder + '/' + case_id + '_residuals.csv' if self.residuals_folder is not None else None
+        return PyFRIntegratorHandler(mesh_file_path, config_path, backend = backend, device_id = device_id, case_id = case_id, residuals_path = residuals_path, residuals_frequency = self.residuals_frequency)
 
     def _create_bezier_integrator(self, config_path, backend, integrator_id = None):
         shape = Shape(**self.bezier_config['shape'])
@@ -315,6 +318,8 @@ if __name__ == '__main__':
     parser.add_argument('--backend', type=str, default='openmp', help="'cuda', 'opencl', 'openmp' or 'hip'")
     parser.add_argument('--sample_times', nargs=3, type=float, help='3 floats for start stop step', default = [5.0,120.0,0.25])
     parser.add_argument('--no-auto-device-placement', action='store_false')
+    parser.add_argument('--residuals_folder', type=str, help='Folder to save solution residuals in. If not specified, no residuals will be recorded.', default=None)
+    parser.add_argument('--residuals_frequency', type=int, default=20, help='Timestep frequency for recording residuals')
     args = parser.parse_args()
 
     if args.bezier_cfg is not None:
@@ -332,6 +337,8 @@ if __name__ == '__main__':
         auto_device_placement = args.no_auto_device_placement,
         sample_times = args.sample_times,
         bezier_config = bezier_cfg,
+        residuals_folder = args.residuals_folder,
+        residuals_frequency = args.residuals_frequency
     )
 
     print(f'Running cases: {[i.case_id for i in dh.integrators]}')

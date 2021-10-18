@@ -6,12 +6,13 @@ import scipy.interpolate
 import numpy as np
 import secrets
 import functools
+import warnings
 
 from .pyfr_solver_create import pyfr_solver_create
 
 class PyFRIntegratorHandler:
         #executor = concurrent.futures.ProcessPoolExecutor()
-        def __init__(self, mesh_path, ini_path, backend = 'openmp', device_id=None, case_id=None):
+        def __init__(self, mesh_path, ini_path, backend = 'openmp', device_id=None, case_id=None, residuals_path=None, residuals_frequency=20):
                 '''
         	Handler object to manage running multiple PyFR integrators (i.e. solvers) simultaneously.
 
@@ -37,6 +38,8 @@ class PyFRIntegratorHandler:
                 self.device_id = device_id
                 self._pipe_main, self._pipe_child = multiprocessing.Pipe(duplex=True)
                 self.case_id = case_id if case_id is not None else secrets.token_hex(4)
+                self.residuals_path = residuals_path
+                self.residuals_frequency = residuals_frequency
 
         def _raise_multiprocessing_error(self):
                 if (multiprocessing.current_process().name == 'MainProcess') and self.solver is None and self._process is None:#no solver available
@@ -60,6 +63,13 @@ class PyFRIntegratorHandler:
 
                 if self.device_id is not None and self.backend != 'openmp':
                         ini.set(f'backend-{self.backend}', 'device-id', self.device_id)
+
+                if self.residuals_path is not None:
+                        #if 'soln-plugin-pseudostats' in ini:
+                        #        warnings.warn('Overriding existing soln-plugin-pseudostats field in ini for residual recording.')
+                        ini.set('soln-plugin-pseudostats', 'file', self.residuals_path)
+                        ini.set('soln-plugin-pseudostats', 'nsteps', str(self.residuals_frequency))
+                        ini.set('soln-plugin-pseudostats', 'header', 'true')
                 
                 self.solver = pyfr_solver_create(mesh, None, ini, self.backend)
 

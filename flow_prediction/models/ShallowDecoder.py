@@ -1,7 +1,6 @@
 import tensorflow as tf
 
-def original_shallow_decoder(input_layer_shape, output_layer_size, learning_rate, hidden_layer_units = None, hidden_layer_activations = None, normalization = None, l2_regularization = 0.0, loss_function = None, metrics = None):
-
+def _get_original_shallow_decoder_layers(input_layer_shape, output_layer_size, hidden_layer_units = None, hidden_layer_activations = None, normalization = None, l2_regularization = 0.0):
     if hidden_layer_units is None:
         hidden_layer_units = [40,40]
     if hidden_layer_activations is None:
@@ -17,26 +16,18 @@ def original_shallow_decoder(input_layer_shape, output_layer_size, learning_rate
         if normalization is not None:
             layers.append(normalization_map[normalization]())
     layers.append(tf.keras.layers.Dense(output_layer_size))
+    return layers
+
+def original_shallow_decoder(input_layer_shape, output_layer_size, learning_rate=None, hidden_layer_units = None, hidden_layer_activations = None, normalization = None, l2_regularization = 0.0, loss_function = None, metrics = None):
+
+    layers = _get_original_shallow_decoder_layers(input_layer_shape, output_layer_size, hidden_layer_units, hidden_layer_activations, normalization, l2_regularization)
 
     model = tf.keras.models.Sequential(layers)
-    
-    # Model
-    # model = tf.keras.models.Sequential([
-    #     # Layer 1
-    #     tf.keras.layers.Input(input_layer_shape),
-    #     tf.keras.layers.Dense(40, activation='relu', kernel_initializer='glorot_normal'),
-    #     tf.keras.layers.BatchNormalization(),
-        
-    #     # Layer 2
-    #     tf.keras.layers.Dense(45, activation='relu', kernel_initializer='glorot_normal'),
-    #     tf.keras.layers.BatchNormalization(),
-        
-    #     # Output layer
-    #     tf.keras.layers.Dense(output_layer_size),
-    # ])
 
+    
     # Optimiser
-    optimiser = tf.keras.optimizers.Adam(learning_rate=learning_rate)
+    if learning_rate is not None:
+        optimiser = tf.keras.optimizers.Adam(learning_rate=learning_rate)
 
     # Defining losses
     if loss_function is None:
@@ -44,8 +35,10 @@ def original_shallow_decoder(input_layer_shape, output_layer_size, learning_rate
 
     # Defining metrics
     #metrics = tf.keras.metrics.MeanAbsoluteError()
-
-    model.compile(optimizer=optimiser, loss=loss_function, metrics=metrics)
+    try:
+        model.compile(optimizer=optimiser, loss=loss_function, metrics=metrics)
+    except:
+        pass
 
     return model
 

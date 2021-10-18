@@ -13,7 +13,7 @@ class NS_annulus_residual:
                             [[0,-1,0],[0,0,0],[0,1,0]],\
                             [[0,0,0],[-1,0,1],[0,0,0]]\
                             ])
-    def __init__(self, annulusmap, annulus_polar_coords, nu = 1.0, rho = 1.0, norm_ord = 1, reduce_mean = False, momentum_weight = 1.0, continuity_weight = 1.0):
+    def __init__(self, annulusmap, annulus_polar_coords = None, nu = 1.0, rho = 1.0, norm_ord = 1, reduce_mean = False, momentum_weight = 1.0, continuity_weight = 1.0):
 
         # dy = dx if dy is None else dy
         # kernel_d2 = np.einsum('i,i...->i...',np.array([dx**-2, 0.25/(dx*dy), dy**2]),self._kernels_d2)
@@ -23,8 +23,16 @@ class NS_annulus_residual:
         self.reduce_mean = reduce_mean
         self.nu = nu
         self.rho = rho
-        self.annulus_polar_coords = annulus_polar_coords
-        self.annulusmap = annulusmap
+
+        if isinstance(annulusmap, dict):
+            self.annulusmap = pydsc.AnnulusMap(mapping_params=annulusmap)
+        else:
+            self.annulusmap = annulusmap
+
+        if annulus_polar_coords is None:
+            self.annulus_polar_coords = self.annulusmap._generate_annular_grid(return_polar=True)
+        else:
+            self.annulus_polar_coords = annulus_polar_coords
 
         momentum_weight = [momentum_weight, momentum_weight] if isinstance(momentum_weight, float) else momentum_weight
         self.resid_weights = tf.constant(momentum_weight + [continuity_weight], dtype=tf.keras.backend.floatx())
@@ -94,19 +102,19 @@ class NS_annulus_residual:
         #u-momentum eq: (u_r*(eta_x*r_eta + r_xi*xi_x) + u_theta*(eta_x*theta_eta + theta_xi*xi_x))*u + (u_r*(eta_y*r_eta + r_xi*xi_y) + u_theta*(eta_y*theta_eta + theta_xi*xi_y))*v
         #v-momentum eq: (v_r*(eta_x*r_eta + r_xi*xi_x) + v_theta*(eta_x*theta_eta + theta_xi*xi_x))*u + (v_r*(eta_y*r_eta + r_xi*xi_y) + v_theta*(eta_y*theta_eta + theta_xi*xi_y))*v
 
-        x_dir_coefficients = tf.stack([self.eta_x*self.r_eta + self.r_xi*self.xi_x, self.eta_x*self.theta_eta + self.theta_xi*self.xi_x],0)#[[r_coeff,theta_coeff],nr,ntheta]
-        y_dir_coefficients = tf.stack([self.eta_y*self.r_eta + self.r_xi*self.xi_y, self.eta_y*self.theta_eta + self.theta_xi*self.xi_y],0)
+        x_dir_coefficients = tf.cast(tf.stack([self.eta_x*self.r_eta + self.r_xi*self.xi_x, self.eta_x*self.theta_eta + self.theta_xi*self.xi_x],0), tf.keras.backend.floatx())#[[r_coeff,theta_coeff],nr,ntheta]
+        y_dir_coefficients = tf.cast(tf.stack([self.eta_y*self.r_eta + self.r_xi*self.xi_y, self.eta_y*self.theta_eta + self.theta_xi*self.xi_y],0), tf.keras.backend.floatx())
 
-        @tf.function
+        #@tf.function(experimental_relax_shapes=True)
         def eval_advection_term(u,v):
             
             u_grads_polar = tf.nn.conv2d(u, self.fd_kernels_d1, 1, "SAME", "NCHW", 1)#dudr and du/dtheta; [batch,[u_r,u_theta],nr,ntheta]
-            umom_u_coeff = tf.expand_dims(tf.einsum('dij,...dij->...ij', x_dir_coefficients, u_grads_polar),0)#dudx
-            umom_v_coeff = tf.expand_dims(tf.einsum('dij,...dij->...ij', y_dir_coefficients, u_grads_polar),0)#dudy
+            umom_u_coeff = tf.expand_dims(tf.einsum('dij,...dij->...ij', x_dir_coefficients, u_grads_polar),1)#dudx
+            umom_v_coeff = tf.expand_dims(tf.einsum('dij,...dij->...ij', y_dir_coefficients, u_grads_polar),1)#dudy
             
             v_grads_polar = tf.nn.conv2d(v, self.fd_kernels_d1, 1, "SAME", "NCHW", 1)
-            vmom_u_coeff = tf.expand_dims(tf.einsum('dij,...dij->...ij', x_dir_coefficients, v_grads_polar),0)#dvdx
-            vmom_v_coeff = tf.expand_dims(tf.einsum('dij,...dij->...ij', y_dir_coefficients, v_grads_polar),0)#dvdy
+            vmom_u_coeff = tf.expand_dims(tf.einsum('dij,...dij->...ij', x_dir_coefficients, v_grads_polar),1)#dvdx
+            vmom_v_coeff = tf.expand_dims(tf.einsum('dij,...dij->...ij', y_dir_coefficients, v_grads_polar),1)#dvdy
 
             u_term = u * umom_u_coeff + v * umom_v_coeff
             v_term = u * vmom_u_coeff + v * vmom_v_coeff
@@ -127,7 +135,7 @@ class NS_annulus_residual:
         p_coefficients = tf.stack([p_x_coefficients,p_y_coefficients],0)
         
         fd_kernels = self.fd_kernels_d1
-        @tf.function
+        #@tf.function(experimental_relax_shapes=True)
         def eval_pressure_term(p):
             #p_term: shape [batch_size, 2, nx-2, ny-2]. p_term[i,j] contains (-1/rho)*(dp/dx_j)
             pressure_grads_polar = tf.nn.conv2d(p, fd_kernels, 1, "SAME", "NCHW", 1)
@@ -145,32 +153,32 @@ class NS_annulus_residual:
         rr_xx_coefficient = (self.eta_x*self.r_eta + self.r_xi*self.xi_x)*(self.eta_x*self.r_eta + self.r_xi*self.xi_x)
         rtheta_xx_coefficient = (self.eta_x*self.r_eta + self.r_xi*self.xi_x)*(self.eta_x*self.theta_eta + self.theta_xi*self.xi_x) + (self.eta_x*self.theta_eta + self.theta_xi*self.xi_x)*(self.eta_x*self.r_eta + self.r_xi*self.xi_x)
         thetatheta_xx_coefficient = (self.eta_x*self.theta_eta + self.theta_xi*self.xi_x)*(self.eta_x*self.theta_eta + self.theta_xi*self.xi_x)
-        xx_coefficients = tf.stack([r_xx_coefficient, theta_xx_coefficient, rr_xx_coefficient, rtheta_xx_coefficient, thetatheta_xx_coefficient], 0)
+        xx_coefficients = tf.cast(tf.stack([r_xx_coefficient, theta_xx_coefficient, rr_xx_coefficient, rtheta_xx_coefficient, thetatheta_xx_coefficient], 0), tf.keras.backend.floatx())
 
         r_yy_coefficient = (self.eta_y*(self.eta_y*self.r_eta_eta + self.r_xi_eta*self.xi_y) + self.eta_y_y*self.r_eta + self.r_xi*self.xi_y_y + self.xi_y*(self.eta_y*self.r_xi_eta + self.r_xi_xi*self.xi_y))
         theta_yy_coefficient = (self.eta_y*(self.eta_y*self.theta_eta_eta + self.theta_xi_eta*self.xi_y) + self.eta_y_y*self.theta_eta + self.theta_xi*self.xi_y_y + self.xi_y*(self.eta_y*self.theta_xi_eta + self.theta_xi_xi*self.xi_y))
         rr_yy_coefficient = (self.eta_y*self.r_eta + self.r_xi*self.xi_y)*(self.eta_y*self.r_eta + self.r_xi*self.xi_y)
         rtheta_yy_coefficient = (self.eta_y*self.r_eta + self.r_xi*self.xi_y)*(self.eta_y*self.theta_eta + self.theta_xi*self.xi_y) + (self.eta_y*self.theta_eta + self.theta_xi*self.xi_y)*(self.eta_y*self.r_eta + self.r_xi*self.xi_y)
         thetatheta_yy_coefficient = (self.eta_y*self.theta_eta + self.theta_xi*self.xi_y)*(self.eta_y*self.theta_eta + self.theta_xi*self.xi_y)
-        yy_coefficients = tf.stack([r_yy_coefficient, theta_yy_coefficient, rr_yy_coefficient, rtheta_yy_coefficient, thetatheta_yy_coefficient], 0)
+        yy_coefficients = tf.cast(tf.stack([r_yy_coefficient, theta_yy_coefficient, rr_yy_coefficient, rtheta_yy_coefficient, thetatheta_yy_coefficient], 0), tf.keras.backend.floatx())
 
-        @tf.function
+        #@tf.function(experimental_relax_shapes=True)
         def get_derivs_polar(u, u_grads_polar):
             u_polar_2nd_derivs = tf.nn.conv2d(u, self.fd_kernels_d2, 1, "SAME", "NCHW", 1)
             u_derivs = tf.concat([u_grads_polar, u_polar_2nd_derivs],1)
             return u_derivs
 
-        @tf.function
+        #@tf.function(experimental_relax_shapes=True)
         def eval_xx_term(u_derivs):
             uxx = tf.einsum('gij,...gij->...ij', xx_coefficients, u_derivs)
             return tf.expand_dims(uxx,1)
 
-        @tf.function
+        #@tf.function(experimental_relax_shapes=True)
         def eval_yy_term(u_derivs):
             uyy = tf.einsum('gij,...gij->...ij', yy_coefficients, u_derivs)
             return tf.expand_dims(uyy,1)
 
-        @tf.function
+        #@tf.function(experimental_relax_shapes=True)
         def eval_diffusion_term(u, u_grads_polar, v, v_grads_polar):
             u_derivs = get_derivs_polar(u, u_grads_polar)
             v_derivs = get_derivs_polar(v, v_grads_polar)
@@ -186,7 +194,7 @@ class NS_annulus_residual:
 
         return eval_diffusion_term
 
-    @tf.function
+    #@tf.function
     def __call__(self, u, dudt, v, dvdt, p):
         pterm = self.eval_pressure_term(p)
         aterm,u_grads_polar,ux,v_grads_polar,vy = self.eval_advection_term(u,v)

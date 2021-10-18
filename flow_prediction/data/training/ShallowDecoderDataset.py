@@ -48,7 +48,7 @@ def _extract_values(case, sensor_slice=None, full_field_slice=None, normalizatio
     full_field_values = full_field_values[...,full_field_slice].reshape(ntimesteps,-1)
     return sensor_values, full_field_values, normalization_params
 
-def ShallowDecoderDataset(h5path, batch_size=None, shuffle=False, retain_time_dimension=False, sensor_masks = None, full_field_mask = None, h5py_driver = None, h5py_driver_kwargs = None, normalization = None, dtypes = None, train_test_split = None, rand_seed = None, return_case_names = False, return_normalization_parameters = False):
+def ShallowDecoderDataset(h5path, batch_size=None, shuffle=False, retain_time_dimension=False, sensor_masks = None, full_field_mask = None, h5py_driver = None, h5py_driver_kwargs = None, normalization = None, dtypes = None, train_test_split = None, train_test_split_by_case = False, rand_seed = None, return_case_names = False, return_case_ids = False, return_normalization_parameters = False):
     if train_test_split is not None:
         assert ((1.0-train_test_split) > 0.0)
         
@@ -94,6 +94,8 @@ def ShallowDecoderDataset(h5path, batch_size=None, shuffle=False, retain_time_di
         
     sensor_values, full_field_values, normalization_params = zip(*[_extract_values(h5file[case], sensor_slice = sensor_slice, full_field_slice=full_field_slice, normalization=normalization) for case in h5file.keys()])
     case_names = np.concatenate([[case_name for _ in range(h5file[case_name]['sensor_values'].shape[0])] for case_name in h5file.keys()],0)
+    case_id_map = {case:k for k,case in enumerate(h5file.keys())}
+    case_ids = np.vectorize(lambda x: case_id_map[x])(case_names)
 
     if retain_time_dimension:
         sensor_values = np.stack(sensor_values,0)
@@ -107,51 +109,71 @@ def ShallowDecoderDataset(h5path, batch_size=None, shuffle=False, retain_time_di
     sensor_values = sensor_values.astype(dtypes[0])
     full_field_values = full_field_values.astype(dtypes[1])
     normalization_params = normalization_params.astype(dtypes[2])
-    
+
+    return_list = []
     if train_test_split is None:
         args_list = [sensor_values, full_field_values]
         if return_normalization_parameters:
             args_list.append(normalization_params)
         if return_case_names:
             args_list.append(case_names)
+        if return_case_ids:
+            args_list.append(case_ids)
         dset = tf.data.Dataset.from_tensor_slices(tuple(args_list))
         if shuffle:
             dset = dset.shuffle()
         if batch_size is not None:
             dset = dset.batch(batch_size)
-        return dset
+        return_list.append(dset)
     else:
         if rand_seed is not None:
             np.random.seed(rand_seed)
         global_indices = np.arange(sensor_values.shape[0])
-        shuffled_indices = copy.deepcopy(global_indices)
-        np.random.shuffle(shuffled_indices)
-        max_test_index = round(sensor_values.shape[0] * (1.0-train_test_split))
-        test_indices = shuffled_indices[:max_test_index]
-        train_indices = shuffled_indices[max_test_index:]
+        
+        if train_test_split_by_case:
+            max_test_case_id = round(len(h5file.keys()) * (1.0-train_test_split))
+            test_case_mask = case_ids < max_test_case_id
+            test_indices = np.where(test_case_mask)[0]
+            train_indices = np.where(np.logical_not(test_case_mask))[0]
+            if shuffle:
+                np.random.shuffle(train_indices)
+                np.random.shuffle(test_indices)
+        else:
+            max_test_index = round(sensor_values.shape[0] * (1.0-train_test_split))
+            shuffled_indices = copy.deepcopy(global_indices)
+            np.random.shuffle(shuffled_indices)
+            test_indices = shuffled_indices[:max_test_index]
+            train_indices = shuffled_indices[max_test_index:]
+            if not shuffle:
+                #necessary to shuffle and then sort if not splitting by case to ensure i.i.d. split
+                test_indices = global_indices[:max_test_index]
+                train_indices = global_indices[max_test_index:]
 
-        if not shuffle:
-            train_indices = np.sort(train_indices)
-            test_indices = np.sort(test_indices)
+        
 
         train_sensor = sensor_values[train_indices]
         train_fullfield = full_field_values[train_indices]
-        train_normalization_params = normalization_params[train_indices]
-        train_case_names = case_names[train_indices]
         
         test_sensor = sensor_values[test_indices]
         test_fullfield = full_field_values[test_indices]
-        test_normalization_params = normalization_params[test_indices]
-        test_case_names = case_names[test_indices]
 
         train_args_list = [train_sensor, train_fullfield]
         test_args_list = [test_sensor, test_fullfield]
         if return_normalization_parameters:
+            train_normalization_params = normalization_params[train_indices]
+            test_normalization_params = normalization_params[test_indices]
             train_args_list.append(train_normalization_params)
             test_args_list.append(test_normalization_params)
         if return_case_names:
+            train_case_names = case_names[train_indices]
+            test_case_names = case_names[test_indices]
             train_args_list.append(train_case_names)
             test_args_list.append(test_case_names)
+        if return_case_ids:
+            train_case_ids = case_ids[train_indices]
+            test_case_ids = case_ids[test_indices]
+            train_args_list.append(train_case_ids)
+            test_args_list.append(test_case_ids)
 
         dset_train = tf.data.Dataset.from_tensor_slices(tuple(train_args_list))
         dset_test = tf.data.Dataset.from_tensor_slices(tuple(test_args_list))
@@ -160,8 +182,12 @@ def ShallowDecoderDataset(h5path, batch_size=None, shuffle=False, retain_time_di
             dset_train = dset_train.batch(batch_size)
             dset_test = dset_test.batch(batch_size)
 
-        return dset_train, dset_test
-        
+        return_list = return_list + [dset_train, dset_test]
+
+    if return_case_ids:
+        return_list.append(case_id_map)
+
+    return return_list
         
     
 
