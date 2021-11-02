@@ -1,10 +1,21 @@
+import copy
 import tensorflow as tf
+from .UNet import slrelu
 
 def _get_original_shallow_decoder_layers(input_layer_shape, output_layer_size, hidden_layer_units = None, hidden_layer_activations = None, normalization = None, l2_regularization = 0.0):
     if hidden_layer_units is None:
         hidden_layer_units = [40,40]
     if hidden_layer_activations is None:
         hidden_layer_activations = ['relu' for _ in hidden_layer_units]
+    else:
+        for k in range(len(hidden_layer_activations)):
+            activation = hidden_layer_activations[k]
+            if activation == 'leaky_relu':
+                activation = tf.nn.leaky_relu
+            elif activation == 'slrelu':
+                activation = slrelu
+            hidden_layer_activations[k] = activation
+        
     assert len(hidden_layer_activations) == len(hidden_layer_units)
 
     normalization_map = {'batchnorm': tf.keras.layers.BatchNormalization, 'layernorm': tf.keras.layers.LayerNormalization}
