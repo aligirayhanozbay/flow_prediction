@@ -31,6 +31,8 @@ class NS_annulus_residual:
 
         if annulus_polar_coords is None:
             self.annulus_polar_coords = self.annulusmap._generate_annular_grid(return_polar=True)
+        elif isinstance(annulus_polar_coords, list) or isinstance(annulus_polar_coords, tuple):
+            self.annulus_polar_coords = self.annulusmap._generate_annular_grid(n_pts = annulus_polar_coords, return_polar=True)
         else:
             self.annulus_polar_coords = annulus_polar_coords
 
