@@ -36,7 +36,7 @@ def _fullfield_mean_center(sensor_values, full_field_values):
     means = np.mean(full_field_values, axis=1, keepdims=True)
     return sensor_values-means, full_field_values-means, np.squeeze(means)
 
-def _extract_values(case, sensor_slice=None, full_field_slice=None, normalization=None):
+def _extract_values(case, sensor_slice=None, full_field_slice=None, normalization=None, retain_variable_dimension=False, var_shape = None):
     normalization_methods = {'sensor_mean_center': _sensor_mean_center, 'full_field_mean_center': _fullfield_mean_center, None: lambda x,y: (x,y,np.zeros(x.shape[:1],dtype=x.dtype))}
     if sensor_slice is None:
         sensor_slice = slice(0,None,None)
@@ -45,14 +45,29 @@ def _extract_values(case, sensor_slice=None, full_field_slice=None, normalizatio
     ntimesteps = case['sensor_values'].shape[0]
     sensor_values, full_field_values, normalization_params = normalization_methods[normalization](np.array(case['sensor_values']), np.array(case['full_field_values']))
     sensor_values = sensor_values.reshape(ntimesteps,-1)[:,sensor_slice]
-    full_field_values = full_field_values[...,full_field_slice].reshape(ntimesteps,-1)
+    full_field_values = full_field_values[...,full_field_slice]
+
+    if not retain_variable_dimension:
+        full_field_values = full_field_values.reshape(ntimesteps,-1)
+    elif var_shape is not None:
+        newshape = [ntimesteps,*var_shape,full_field_values.shape[-1]]
+        full_field_values = full_field_values.reshape(newshape)
+        if tf.keras.backend.image_data_format() == 'channels_first':
+            transpose_ord = [0,len(newshape)-1] + list(range(1,len(newshape)-1))
+            full_field_values = full_field_values.transpose(transpose_ord)
+            
     return sensor_values, full_field_values, normalization_params
 
-def ShallowDecoderDataset(h5path, batch_size=None, shuffle=False, retain_time_dimension=False, sensor_masks = None, full_field_mask = None, h5py_driver = None, h5py_driver_kwargs = None, normalization = None, dtypes = None, train_test_split = None, train_test_split_by_case = False, rand_seed = None, return_case_names = False, return_case_ids = False, return_normalization_parameters = False):
+def ShallowDecoderDataset(h5path, batch_size=None, shuffle=False, retain_time_dimension=False, retain_variable_dimension=False, reshape_to_grid=False, sensor_masks = None, full_field_mask = None, h5py_driver = None, h5py_driver_kwargs = None, normalization = None, dtypes = None, train_test_split = None, train_test_split_by_case = False, rand_seed = None, return_case_names = False, return_case_ids = False, return_normalization_parameters = False):
     if train_test_split is not None:
         assert ((1.0-train_test_split) > 0.0)
         
     h5file = h5py.File(h5path, 'r', driver = h5py_driver, **({} if h5py_driver_kwargs is None else h5py_driver_kwargs))
+
+    if reshape_to_grid:
+        grid_shape = h5file.attrs['grid_shape']
+    else:
+        grid_shape = None
 
     if dtypes is None:
         dtypes = ['float32','float32','float32']
@@ -87,12 +102,12 @@ def ShallowDecoderDataset(h5path, batch_size=None, shuffle=False, retain_time_di
         sensor_slice = global_variable_indices
 
     if full_field_mask is None:
-        full_field_slice = full_field_slice
+        full_field_slice = None
     else:
         ff_variable_indices = _get_unique_variable_mask_ids(full_field_mask, variable_name_idx_map)
         full_field_slice = np.array(ff_variable_indices)
         
-    sensor_values, full_field_values, normalization_params = zip(*[_extract_values(h5file[case], sensor_slice = sensor_slice, full_field_slice=full_field_slice, normalization=normalization) for case in h5file.keys()])
+    sensor_values, full_field_values, normalization_params = zip(*[_extract_values(h5file[case], sensor_slice = sensor_slice, full_field_slice=full_field_slice, normalization=normalization, retain_variable_dimension=retain_variable_dimension, var_shape = grid_shape) for case in h5file.keys()])
     case_names = np.concatenate([[case_name for _ in range(h5file[case_name]['sensor_values'].shape[0])] for case_name in h5file.keys()],0)
     case_id_map = {case:k for k,case in enumerate(h5file.keys())}
     case_ids = np.vectorize(lambda x: case_id_map[x])(case_names)
@@ -149,7 +164,7 @@ def ShallowDecoderDataset(h5path, batch_size=None, shuffle=False, retain_time_di
                 test_indices = global_indices[:max_test_index]
                 train_indices = global_indices[max_test_index:]
 
-        
+        #import pdb; pdb.set_trace()
 
         train_sensor = sensor_values[train_indices]
         train_fullfield = full_field_values[train_indices]

@@ -9,174 +9,30 @@ import scipy.interpolate
 from tqdm import tqdm
 
 from .mapping import get_vertices, get_maps
+from .postprocess import _load_sensors, get_coordinates, get_field_variables, get_maps, get_sensor_locations, interpolate_to_sensors_and_full_flowfield
 
 _real_dtypes = [np.float32, np.float64, np.float16, np.int64, np.int32, np.int16, np.int8]
 
-def generate_grid(amap, **kwargs):
-    return amap._generate_annular_grid(**kwargs)
+def cartesian_grid_bounds(f, safety_fact = 0.95):
+    ndims = f[list(f.keys())[0]]['coordinates'].shape[1]
+    min_bounds = np.array([-np.inf for _ in range(ndims)])
+    max_bounds = np.array([np.inf for _ in range(ndims)])
+    for shape in f.keys():
+        coords = np.array(f[shape]['coordinates'])
+        max_coords = np.max(coords, axis=0)
+        min_coords = np.min(coords, axis=0)
+        min_bounds = np.max(np.stack([min_bounds, min_coords],0), axis=0)
+        max_bounds = np.min(np.stack([max_bounds, max_coords],0), axis=0)
+    centers = 0.5*(min_bounds + max_bounds)
+    max_bounds_center_diff = max_bounds - centers
+    min_bounds_center_diff = centers - min_bounds
+    max_bounds = centers + safety_fact * max_bounds_center_diff
+    min_bounds = centers - safety_fact * min_bounds_center_diff
+    return min_bounds, max_bounds
 
-def _parse_z_placement_modes(placement_modes):
-    if placement_modes is None:
-        placement_modes = [None,None]
-    elif isinstance(placement_modes, str):
-        placement_modes = [placement_modes, placement_modes]
-    else:
-        placement_modes = copy.deepcopy(placement_modes)
-        
-    placement_map = {'behind': np.max, 'above': np.max, 'centered': np.mean, 'below': np.min, 'front': np.min, None: lambda x: 0.0}
-    
-    for k in range(len(placement_modes)):
-        if not callable(placement_modes[k]):
-            placement_modes[k] = placement_map[placement_modes[k]]
-            
-    return placement_modes
-
-def _parse_w_placement_modes(placement_modes):
-    if placement_modes is None:
-        placement_modes = [None,None]
-    elif isinstance(placement_modes, str):
-        placement_modes = [placement_modes, placement_modes]
-    else:
-        placement_modes = copy.deepcopy(placement_modes)
-        
-    radial_modes = {'inner_relative': (lambda r,ri: r+ri), None: (lambda r,ri: r), 'outer_relative': (lambda r,ri: 1.0-np.abs(r)), 'scaled': (lambda r, ri: ri + (1-(1e-5)-ri) * r)}
-    angular_modes = {None: (lambda theta, vertices: theta)}
-    if not callable(placement_modes[0]):
-        placement_modes[0] = radial_modes[placement_modes[0]]
-    if not callable(placement_modes[1]):
-        placement_modes[1] = angular_modes[placement_modes[1]]
-    return placement_modes
-
-def get_sensor_locations(annulusmap, z_sensors=None, w_sensors=None, z_placement_modes = None, w_placement_modes = None, forward_map_opts = None, backward_map_opts = None):
-    
-    vertices = annulusmap.mapping_params['inner_polygon_vertices']
-    
-    if z_sensors is not None:
-        z_placement_modes = _parse_z_placement_modes(z_placement_modes)
-        z_sensors = z_placement_modes[0](np.real(vertices)) + 1j*z_placement_modes[1](np.imag(vertices)) + z_sensors
-        z_sensors_projected = annulusmap.backward_map(z_sensors)
-    else:
-        z_sensors = np.zeros((0,), dtype=np.complex128)
-        z_sensors_projected = np.zeros((0,), dtype=np.complex128)
-
-    if w_sensors is not None:
-        if w_sensors.dtype in _real_dtypes:
-            if len(w_sensors.shape) == 2 and w_sensors.shape[1] == 2:
-                w_placement_modes = _parse_w_placement_modes(w_placement_modes)
-                w_sensors[:,0] = w_placement_modes[0](w_sensors[:,0], annulusmap.mapping_params['inner_radius'])
-                w_sensors[:,1] = w_placement_modes[1](w_sensors[:,1], vertices)
-                w_sensors = w_sensors[:,0] * np.exp(1j*w_sensors[:,1]) #assuming they are of form (r,theta) for re^(i*theta)
-            else:
-                w_sensors = w_sensors.astype(np.complex128)
-        w_sensors_projected = annulusmap.forward_map(w_sensors)
-    else:
-        w_sensors = np.zeros((0,), dtype=np.complex128)
-        w_sensors_projected = np.zeros((0,), dtype=np.complex128)
-
-    all_sensors_in_z_plane = np.concatenate([z_sensors, w_sensors_projected],0)
-    all_sensors_in_w_plane = np.concatenate([z_sensors_projected, w_sensors],0)
-        
-    return all_sensors_in_z_plane, all_sensors_in_w_plane
-
-def interpolate_to_sensors_and_full_flowfield(soln_vals, soln_coords, sensor_coords, full_flowfield_coords):
-    #import pdb; pdb.set_trace()
-    concatenated_coords_complex = np.concatenate([sensor_coords, full_flowfield_coords],0)
-    concatenated_coords = np.stack([np.real(concatenated_coords_complex), np.imag(concatenated_coords_complex)], -1)
-
-    interpolator = scipy.interpolate.CloughTocher2DInterpolator(soln_coords, soln_vals.transpose(1,0,2))
-    target_vals = interpolator(concatenated_coords).transpose(1,0,2)
-
-    return target_vals[:,:sensor_coords.shape[0]], target_vals[:,sensor_coords.shape[0]:,:]
-
-
-class _field_var_computation:
-    __name__ = None
-    @staticmethod
-    def __call__():
-        raise(NotImplementedError(''))
-
-class _get_field_var_p(_field_var_computation):
-    __name__ ='p'
-    @staticmethod
-    def __call__(case):
-        return case['solution'][...,0]
-
-class _get_field_var_u(_field_var_computation):
-    __name__ ='u'
-    @staticmethod
-    def __call__(case):
-        return case['solution'][...,1]
-
-class _get_field_var_v(_field_var_computation):
-    __name__ ='v'
-    @staticmethod
-    def __call__(case):
-        return case['solution'][...,2]
-
-class _get_field_var_vorticity(_field_var_computation):
-    __name__ ='vorticity'
-    @staticmethod
-    def __call__(case):
-        return case['gradients'][...,4]-case['gradients'][...,3]
-
-class _get_field_var_dudt(_field_var_computation):
-    __name__ = 'dudt'
-    varidx = 1
-
-    def __init__(self,dt):
-        self.dt = dt
-        
-    def _get_time_derivative_at_first_snapshot(self,case):
-        ddt = np.array(case['solution'][1,...,self.varidx] - case['solution'][0,...,self.varidx])/self.dt
-        return np.expand_dims(ddt,0)
-
-    def _get_time_derivative_at_last_snapshot(self,case):
-        ddt = np.array(case['solution'][-1,...,self.varidx] - case['solution'][-2,...,self.varidx])/self.dt
-        return np.expand_dims(ddt,0)
-
-    def _get_time_derivative_at_intermediate_snapshots(self,case):
-        return np.array(case['solution'][2:,...,self.varidx] - case['solution'][0:-2,...,self.varidx])/(2*self.dt)
-    
-    def __call__(self,case):
-        ddt_initial = self._get_time_derivative_at_first_snapshot(case)
-        ddt_final = self._get_time_derivative_at_last_snapshot(case)
-        ddt_intermediate = self._get_time_derivative_at_intermediate_snapshots(case)
-        ddt = np.concatenate([ddt_initial,ddt_intermediate,ddt_final],0)
-        return ddt
-
-class _get_field_var_dvdt(_get_field_var_dudt):
-    __name__ = 'dvdt'
-    varidx = 2
-
-def get_field_variables(raw_data, variables, dt=1.0, verbose=False):
-    #variables: List[Union[str,callable]]. Names of variables. Currently s
-    field_var_map = {'p': _get_field_var_p(), 'u': _get_field_var_u(), 'v': _get_field_var_v(), 'vorticity': _get_field_var_vorticity(), 'dudt': _get_field_var_dudt(dt=dt), 'dvdt': _get_field_var_dvdt(dt=dt)}
-    variables = copy.deepcopy(variables)
-    for k in range(len(variables)):
-        if not callable(variables[k]):
-            variables[k] = field_var_map[variables[k]]
-
-    field_vals = []
-    case_names = list(raw_data.keys())
-    if verbose:
-        print('Loading field variables')
-        case_names = tqdm(list(case_names))
-        
-    for case in case_names:
-         field_val = np.stack([get_var(raw_data[case]) for get_var in variables],-1)
-         field_vals.append(field_val)
-         
-
-    variable_names = [v.__name__ for v in variables]
-
-    return field_vals, variable_names
-
-def get_coordinates(raw_data):
-    return [np.array(raw_data[case]['coordinates']) for case in raw_data]
-
-def postprocess_shallowdecoder(load_path, sensor_locations_z = None, sensor_placement_strategy_z = None, sensor_locations_w = None, sensor_placement_strategy_w = None, flowfield_sample_resolution = None, variables=None, mesh_folder = None, save_path=None, h5file_opts = None, verbose=False, nprocs = None, dt=1.0):
+def postprocess_cartesian(load_path, sensor_locations_z = None, sensor_placement_strategy_z = None, sensor_locations_w = None, sensor_placement_strategy_w = None, flowfield_sample_resolution = None, variables=None, mesh_folder = None, save_path=None, h5file_opts = None, verbose=False, nprocs = None, dt=1.0, grid_safety_fact = 0.80):
     '''
-    Postprocess the raw pyfr simulation results to work with shallow decoder training.
+    Postprocess the raw pyfr simulation results to work with shallow decoder but with a cartesian target grid intead.
 
     Inputs:
     -load_path: str. Path to the .h5 file containing the pyfr solutions.
@@ -188,7 +44,7 @@ def postprocess_shallowdecoder(load_path, sensor_locations_z = None, sensor_plac
         'outer_relative': Chooses radial coordinate as the outer ring radius - given values
         'scaled': Expects values between 0.0 and 1.0. 0.0 corresponds to the inner ring and 1.0 to the outer.
         None: Use raw values.
-    -flowfield_sample_resolution: List of 2 ints. How many gridpoints to use in the radial and angular directions to sample the ground truth flowfield.
+    -flowfield_sample_resolution: List of 2 ints. How many gridpoints to use in the x and y directions to sample the ground truth flowfield.
     -variables: List[Union[str, callable]]. Determines the quantities to extract from the raw flow variables. Default options are "p", "u", "v" and "vorticity". Any callable can be provided. Variable names will be recorded in the hdf5 from __name__ property.
     -mesh_folder: str. Directory containing mesh files. Mesh files are required for computing the S-C mappings.
     -save_path: str. Path to save the postprocessed data.
@@ -217,10 +73,13 @@ def postprocess_shallowdecoder(load_path, sensor_locations_z = None, sensor_plac
         sensor_locations_z = sensor_locations_z[:,0] + 1j*sensor_locations_z[:,1]
     #not doing this check for w as the inputs may be given in polar form
 
-    full_flowfield_sensors = np.stack(np.meshgrid(np.linspace(0.0,0.96,flowfield_sample_resolution[0]), np.linspace(0.0,2*np.pi,flowfield_sample_resolution[1]), indexing='ij'),-1).reshape(-1,2)
+    grid_bounds = cartesian_grid_bounds(raw_data, safety_fact = grid_safety_fact)
+    linspaces = [np.linspace(start,end,res) for start,end,res in zip(*grid_bounds, flowfield_sample_resolution)]
+    full_flowfield_sensors = np.stack(np.meshgrid(*linspaces, indexing='ij'),-1).reshape(-1,2)
+    full_flowfield_sensors = full_flowfield_sensors[:,0] + 1j * full_flowfield_sensors[:,1]
         
     sensor_locations_pfunc = functools.partial(get_sensor_locations, w_sensors = sensor_locations_w, z_sensors = sensor_locations_z, z_placement_modes = sensor_placement_strategy_z, w_placement_modes = sensor_placement_strategy_w)
-    full_flowfield_locations_pfunc = functools.partial(get_sensor_locations, w_sensors = full_flowfield_sensors, w_placement_modes = ['scaled', None])
+    full_flowfield_locations_pfunc = functools.partial(get_sensor_locations, z_sensors = full_flowfield_sensors)
     
     vertices = get_vertices(mesh_fnames)
     if verbose:
@@ -274,30 +133,6 @@ def postprocess_shallowdecoder(load_path, sensor_locations_z = None, sensor_plac
 
     return sensor_locations_z, sensor_locations_w, full_flowfield_locations_z, full_flowfield_locations_w, interpolated_values
 
-
-def _load_sensor_coords(v):
-    if v is None:
-        return None
-    elif isinstance(v, str):
-        v = np.load(v)
-    else:
-        v = np.asarray(v)
-    assert ((len(v.shape) == 1) or ((len(v.shape) == 2) and (v.shape[1] == 2)))
-    return v  
-
-def _load_sensors(cfg_path):
-    if os.path.splitext(cfg_path)[1] == '.json':
-        import json
-        sensor_config = json.load(open(cfg_path, 'r'))
-    else:
-        import pickle
-        sensor_config = pickle.load(open(cfg_path,'rb'))
-
-    strategies = [sensor_config.get(x,None) for x in ['z_strategy', 'w_strategy']]
-    coords = [_load_sensor_coords(sensor_config.get(x,None)) for x in ['z_coordinates', 'w_coordinates']]
-    
-    return (strategies[0], coords[0]), (strategies[1], coords[1])
-
     
 if __name__ == '__main__':
     import argparse
@@ -315,7 +150,7 @@ if __name__ == '__main__':
     
     (z_sensor_strategy, z_sensor_coords), (w_sensor_strategy, w_sensor_coords) = _load_sensors(args.sensor_config)
     
-    postprocess_shallowdecoder(args.dataset,
+    postprocess_cartesian(args.dataset,
                                save_path = args.output_path,
                                sensor_locations_z = z_sensor_coords,
                                sensor_placement_strategy_z = z_sensor_strategy,
