@@ -6,6 +6,7 @@ tf.keras.backend.set_image_data_format('channels_first')
 
 from ..models.SD_UNet import SD_UNet
 from ..data.training.ShallowDecoderDataset import ShallowDecoderDataset
+from ..losses import get as get_loss
 
 parser = argparse.ArgumentParser()
 parser.add_argument('experiment_config', type=str)
@@ -32,5 +33,6 @@ distribute_strategy =  tf.distribute.MirroredStrategy()
 with distribute_strategy.scope():
     model = SD_UNet(input_units, grid_shape, out_channels = output_channels, **config['model'])
     model.summary()
-    model.compile(loss=config['training']['loss'], optimizer = tf.keras.optimizers.get(config['training']['optimizer']), metrics = config['training'].get('metrics', None))
+    loss_fn = get_loss(config['training']['loss'])
+    model.compile(loss=loss_fn, optimizer = tf.keras.optimizers.get(config['training']['optimizer']), metrics = config['training'].get('metrics', None))
     model.fit(train_dataset, epochs = config['training']['epochs'], validation_data = test_dataset, callbacks = callbacks)

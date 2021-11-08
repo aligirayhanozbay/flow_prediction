@@ -31,17 +31,45 @@ def _get_kernel_initializer(filters, kernel_size):
     stddev = np.sqrt(2 / (kernel_size ** 2 * filters))
     return TruncatedNormal(stddev=stddev)
 
+def _get_padding_sizes(kernel_size, padding='same', spatial_dims_only=False):
+    data_format = tf.keras.backend.image_data_format()
+
+    batch_dim_paddings = [0,0]
+    channel_dim_paddings = [0,0]
+    if padding == 'same':
+        spatial_dim_paddings = [[k//2, k//2-(1-k%2)] for k in kernel_size]
+    elif padding == 'valid':
+        spatial_dim_paddings = [[0,0] for _ in kernel_size]
+    else:
+        raise(ValueError('padding must be same or valid'))
+
+    if spatial_dims_only:
+        return spatial_dim_paddings
+    else:
+        if data_format == 'channels_first':
+            paddings = [batch_dim_paddings, channel_dim_paddings] + spatial_dim_paddings
+        elif data_format == 'channels_last':
+            paddings = [batch_dim_paddings] + spatial_dim_paddings + [channel_dim_paddings]
+        else:
+            raise(ValueError('expecting channels_first or channels_last as tf keras image data format'))
+
+        return paddings
+
 
 class ConvBlock(layers.Layer):
     normalization_map = {'batchnorm': tf.keras.layers.BatchNormalization, 'layernorm': tf.keras.layers.LayerNormalization, None: lambda *args,**kwargs: lambda x: x}
-    def __init__(self, layer_idx, filters_root, kernel_size, dropout_rate, padding, activation, normalization = None, **kwargs):
+    def __init__(self, layer_idx, filters_root, kernel_size, dropout_rate, padding, activation, normalization = None, padding_mode = None, **kwargs):
         super(ConvBlock, self).__init__(**kwargs)
         self.layer_idx=layer_idx
         self.filters_root=filters_root
         self.kernel_size=kernel_size
         self.dropout_rate=dropout_rate
-        self.padding=padding
         self.activation=activation
+
+        assert (padding.lower() in ['same', 'valid'])
+        self.padding=padding.lower()
+        assert (padding_mode.lower() in [None, 'constant', 'reflect', 'symmetric'])
+        self.padding_mode = padding_mode.lower() if padding_mode is not None else 'constant'
 
         filters = _get_filter_count(layer_idx, filters_root)
         self.normalization_1 = self.normalization_map[normalization](axis=1 if tf.keras.backend.image_data_format() == 'channels_first' else -1)
@@ -49,31 +77,38 @@ class ConvBlock(layers.Layer):
                                       kernel_size=(kernel_size, kernel_size),
                                       kernel_initializer=_get_kernel_initializer(filters, kernel_size),
                                       strides=1,
-                                      padding=padding)
+                                      padding="valid")
         self.dropout_1 = layers.Dropout(rate=dropout_rate)
         self.activation_1 = layers.Activation(activation)
+        self._conv1_paddings_size = _get_padding_sizes(self.conv2d_1.kernel_size)
 
         self.normalization_2 = self.normalization_map[normalization](axis=1 if tf.keras.backend.image_data_format() == 'channels_first' else -1)
         self.conv2d_2 = layers.Conv2D(filters=filters,
                                       kernel_size=(kernel_size, kernel_size),
                                       kernel_initializer=_get_kernel_initializer(filters, kernel_size),
                                       strides=1,
-                                      padding=padding)
+                                      padding="valid")
         self.dropout_2 = layers.Dropout(rate=dropout_rate)
         self.activation_2 = layers.Activation(activation)
+        self._conv2_paddings_size = _get_padding_sizes(self.conv2d_2.kernel_size)
         
-
+    def _pad(self, x, paddings):
+        return tf.pad(x, paddings, mode=self.padding_mode)
+            
+        
     def call(self, inputs, training=None, **kwargs):
         x = inputs
 
         x = self.normalization_1(x)
         x = self.conv2d_1(x)
+        x = self._pad(x, self._conv1_paddings_size)
         if training:
             x = self.dropout_1(x)
         x = self.activation_1(x)
         
         x = self.normalization_2(x)
         x = self.conv2d_2(x)
+        x = self._pad(x, self._conv2_paddings_size)
         if training:
             x = self.dropout_2(x)
         x = self.activation_2(x)
@@ -168,6 +203,7 @@ def UNet(
         pool_size: int = 2,
         dropout_rate: int = 0.5,
         padding:str="valid",
+        padding_mode:str="constant",
         activation:Union[str, Callable]="relu",
         final_activation:Union[str,Callable]="linear",
         final_kernel_size: int = None,
@@ -209,6 +245,7 @@ def UNet(
                        kernel_size=kernel_size,
                        dropout_rate=dropout_rate,
                        padding=padding,
+                       padding_mode=padding_mode,
                        activation=activation,
                        normalization=normalization)
 
