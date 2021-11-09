@@ -31,10 +31,10 @@ def _get_kernel_initializer(filters, kernel_size):
     stddev = np.sqrt(2 / (kernel_size ** 2 * filters))
     return TruncatedNormal(stddev=stddev)
 
-def _get_padding_sizes(kernel_size, padding='same', spatial_dims_only=False):
+def _get_padding_sizes(kernel_size, padding='same', include_time_dim = False, spatial_dims_only=False):
     data_format = tf.keras.backend.image_data_format()
 
-    batch_dim_paddings = [0,0]
+    batch_dim_paddings = [[0,0],[0,0]] if include_time_dim else [[0,0]]
     channel_dim_paddings = [0,0]
     if padding == 'same':
         spatial_dim_paddings = [[k//2, k//2-(1-k%2)] for k in kernel_size]
@@ -47,9 +47,9 @@ def _get_padding_sizes(kernel_size, padding='same', spatial_dims_only=False):
         return spatial_dim_paddings
     else:
         if data_format == 'channels_first':
-            paddings = [batch_dim_paddings, channel_dim_paddings] + spatial_dim_paddings
+            paddings = [*batch_dim_paddings, channel_dim_paddings] + spatial_dim_paddings
         elif data_format == 'channels_last':
-            paddings = [batch_dim_paddings] + spatial_dim_paddings + [channel_dim_paddings]
+            paddings = [*batch_dim_paddings] + spatial_dim_paddings + [channel_dim_paddings]
         else:
             raise(ValueError('expecting channels_first or channels_last as tf keras image data format'))
 
@@ -68,7 +68,7 @@ class ConvBlock(layers.Layer):
 
         assert (padding.lower() in ['same', 'valid'])
         self.padding=padding.lower()
-        assert (padding_mode.lower() in [None, 'constant', 'reflect', 'symmetric'])
+        assert (padding_mode is None) or (padding_mode.lower() in ['constant', 'reflect', 'symmetric'])
         self.padding_mode = padding_mode.lower() if padding_mode is not None else 'constant'
 
         filters = _get_filter_count(layer_idx, filters_root)
