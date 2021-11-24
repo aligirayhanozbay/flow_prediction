@@ -78,8 +78,9 @@ def get_sensor_locations(annulusmap, z_sensors=None, w_sensors=None, z_placement
         
     return all_sensors_in_z_plane, all_sensors_in_w_plane
 
-def interpolate_to_sensors_and_full_flowfield(soln_vals, soln_coords, sensor_coords, full_flowfield_coords):
-    #import pdb; pdb.set_trace()
+def interpolate_to_sensors_and_full_flowfield(soln_vals, soln_coords, sensor_coords, full_flowfield_coords=None):
+    if full_flowfield_coords is None:
+        full_flowfield_coords = np.zeros((0,*sensor_coords.shape[1:]), dtype=sensor_coords.dtype)
     concatenated_coords_complex = np.concatenate([sensor_coords, full_flowfield_coords],0)
     concatenated_coords = np.stack([np.real(concatenated_coords_complex), np.imag(concatenated_coords_complex)], -1)
 
@@ -174,7 +175,7 @@ def get_field_variables(raw_data, variables, dt=1.0, verbose=False):
 def get_coordinates(raw_data):
     return [np.array(raw_data[case]['coordinates']) for case in raw_data]
 
-def postprocess_shallowdecoder(load_path, sensor_locations_z = None, sensor_placement_strategy_z = None, sensor_locations_w = None, sensor_placement_strategy_w = None, flowfield_sample_resolution = None, variables=None, mesh_folder = None, save_path=None, h5file_opts = None, verbose=False, nprocs = None, dt=1.0):
+def postprocess_shallowdecoder(load_path, sensor_locations_z = None, sensor_placement_strategy_z = None, sensor_locations_w = None, sensor_placement_strategy_w = None, flowfield_sample_resolution = None, variables=None, mesh_folder = None, save_path=None, h5file_opts = None, verbose=False, nprocs = None, dt=1.0, sensors_only=False):
     '''
     Postprocess the raw pyfr simulation results to work with shallow decoder training.
 
@@ -196,6 +197,7 @@ def postprocess_shallowdecoder(load_path, sensor_locations_z = None, sensor_plac
     -verbose: bool. Prints progress information to stdout if True.
     -nprocs: int. Number of worker processes.
     -dt: float. Time step for computing time derivatives. If not supplied, a timestep of 1.0 will be assumed so you may have to manually divide the values by the actual dt later instead.
+    -sensors_only: bool. If True, only the sensor data will be extracted.
     '''
     
     assert load_path != save_path
@@ -237,14 +239,17 @@ def postprocess_shallowdecoder(load_path, sensor_locations_z = None, sensor_plac
         if verbose:
             taskcounter += 1
             print(f"[{taskcounter}/{total_tasks}] Computed sensors' locations in original and transformed coordinates")
-            
-        full_flowfield_locations = list(executor.map(full_flowfield_locations_pfunc, amaps))
-        if verbose:
-            taskcounter += 1
-            print(f"[{taskcounter}/{total_tasks}] Computed dense mesh point locations in original and transformed coordinates")
-            
         sensor_locations_z, sensor_locations_w = list(zip(*sensor_locations))
-        full_flowfield_locations_z, full_flowfield_locations_w = list(zip(*full_flowfield_locations))
+
+        if not sensors_only:
+            full_flowfield_locations = list(executor.map(full_flowfield_locations_pfunc, amaps))
+            if verbose:
+                taskcounter += 1
+                print(f"[{taskcounter}/{total_tasks}] Computed dense mesh point locations in original and transformed coordinates")
+            full_flowfield_locations_z, full_flowfield_locations_w = list(zip(*full_flowfield_locations))
+        else:
+            full_flowfield_locations_z = itertools.repeat(None)
+            full_flowfield_locations_w = itertools.repeat(None)
         
         interpolated_values = list(executor.map(interpolate_to_sensors_and_full_flowfield, soln_vals, soln_coords, sensor_locations_z, full_flowfield_locations_z))
         if verbose:
@@ -262,10 +267,11 @@ def postprocess_shallowdecoder(load_path, sensor_locations_z = None, sensor_plac
                 grp = f.create_group(case)
                 grp.create_dataset('sensor_locations_z', data=slz)
                 grp.create_dataset('sensor_locations_w', data=slw)
-                grp.create_dataset('full_field_locations_z', data=ffz)
-                grp.create_dataset('full_field_locations_w', data=ffw)
                 grp.create_dataset('sensor_values', data = sensor_values)
-                grp.create_dataset('full_field_values', data = full_field_values)
+                if not sensors_only:
+                    grp.create_dataset('full_field_locations_z', data=ffz)
+                    grp.create_dataset('full_field_locations_w', data=ffw)
+                    grp.create_dataset('full_field_values', data = full_field_values)
                 grp_amap = grp.create_group('amap')
                 amap.export_mapping_params_h5(grp_amap)
         if verbose:
@@ -311,6 +317,7 @@ if __name__ == '__main__':
     parser.add_argument('--verbose', action='store_true')
     parser.add_argument('--nprocs', type=int, default=None, help='Limit the number of workers. May be useful in memory startved situations.')
     parser.add_argument('--dt', type=float, default=1.0, help='Time step for computing time derivatives. If not supplied, a timestep of 1.0 will be assumed so you may have to manually divide the values by the actual dt later instead.')
+    parser.add_argument('--sensors_only', action='store_true', help='Only interpolate to sensor locations')
     args = parser.parse_args()
     
     (z_sensor_strategy, z_sensor_coords), (w_sensor_strategy, w_sensor_coords) = _load_sensors(args.sensor_config)
