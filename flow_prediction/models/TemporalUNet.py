@@ -83,7 +83,7 @@ class TemporalConvBlock(tf.keras.layers.Layer):
 class TemporalUpconvBlock(tf.keras.layers.Layer):
     normalization_map = {'batchnorm': tf.keras.layers.BatchNormalization, 'layernorm': tf.keras.layers.LayerNormalization, None: lambda *args,**kwargs: lambda x: x}
     transpose_indices_map = {'channels_first': [0,2,1,3,4], 'channels_last': [0,4,2,3,1]}
-    def __init__(self, layer_idx, filters_root, temporal_kernel_size, pool_size, padding, activation, normalization = None, **kwargs):
+    def __init__(self, layer_idx, filters_root, temporal_kernel_size, pool_size, padding, activation, normalization = None, temporal_stride=1, **kwargs):
         super().__init__(**kwargs)
         self.layer_idx=layer_idx
         self.filters_root=filters_root
@@ -100,7 +100,7 @@ class TemporalUpconvBlock(tf.keras.layers.Layer):
         self.upconv = tf.keras.layers.Conv3DTranspose(filters // 2,
                                             kernel_size=ksize,
                                             activation=activation,
-                                            strides=(1,pool_size,pool_size),
+                                            strides=(temporal_stride,pool_size,pool_size),
                                             padding=self.padding)
 
         self._transpose_indices = self.transpose_indices_map[tf.keras.backend.image_data_format()]
@@ -256,17 +256,23 @@ if __name__=='__main__':
     
     tf.keras.backend.set_image_data_format('channels_first')
     
-    nx = 256
+    nx = 64
     ny = 256
     nt = 10
     nc = 2
     bsize = 5
     inp = tf.random.uniform((bsize,nt,nc,nx,ny))
 
-    model = TemporalUNet(nt=nt, nx=nx, ny=ny, in_channels=nc, out_channels=1, layer_depth=4, padding='same')
+    model = TemporalUNet(nt=nt, nx=nx, ny=ny, in_channels=nc, out_channels=1, layer_depth=4, padding='same', filters_root=16)
     model.summary()
-    out = model(inp)
-    print(out.shape)
+
+    with tf.GradientTape() as tape:
+        tape.watch(model.trainable_variables)
+        out = model(inp)
+        print(out.shape)
+        loss_val = tf.reduce_mean(tf.abs(out-(inp+2)))
+    grads = tape.gradient(loss_val, model.trainable_variables)
+    assert tf.reduce_all([tf.reduce_all(tf.math.logical_not(tf.math.is_nan(x))) for x in grads])
 
     # cbl = TemporalConvBlock(1,16,3,0.0,0.0,'same','relu','sigmoid')
     # ubl = TemporalUpconvBlock(1,16,3,2,'same','relu')
