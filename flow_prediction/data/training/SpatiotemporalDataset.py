@@ -50,9 +50,10 @@ class SpatiotemporalFRDataset(tf.keras.utils.Sequence):
         self._register_return_arrays(sensor_values, full_field_values, normalization_params, case_names, case_ids)
 
         if isinstance(temporal_window, int):
-            self.temporal_window = np.array([True for _ in range(temporal_window)])
+            self.temporal_window = np.array([1.0 for _ in range(temporal_window)])
         else:
-            self.temporal_window = np.array([bool(x) for x in temporal_window])
+            self.temporal_window = np.array(temporal_window)
+        assert self.temporal_window.dtype in [np.float16, np.float32, np.float64, np.int16, np.int32, np.int64]
         assert len(self.temporal_window.shape) == 1
         
             
@@ -157,10 +158,13 @@ class SpatiotemporalFRDataset(tf.keras.utils.Sequence):
         return_tensors = [[] for _ in range(len(self._return_order))]
         for sample in sample_indices:
             for rt,tn in zip(return_tensors, self._return_order):
-                rt.append(
-                    getattr(self,tn)[sample[0],sample[1]]
-                          )
-        return_tensors = [np.stack(x,0) for x in return_tensors]
+                tensor = getattr(self,tn)[sample[0],sample[1]]
+                if tn == 'sensor_values':
+                    tensor = np.einsum('t...,t->t...',tensor,self.temporal_window)
+                elif tn == 'full_field_values' and tf.keras.backend.image_data_format() == 'channels_last':
+                    tensor = tensor.transpose([0,1,3,4,2])
+                rt.append(tensor)
+        return_tensors = [np.stack(x,0).astype(tf.keras.backend.floatx()) for x in return_tensors]
             
         #tf.gather_nd version - works VERY slowly
         #sample_indices = np.array([list(zip(itertools.repeat(x[0]),range(x[1][0],x[1][1]))) for x in sample_indices], dtype = np.int64)
@@ -176,7 +180,7 @@ class SpatiotemporalFRDataset(tf.keras.utils.Sequence):
 
 if __name__ == '__main__':
     
-    trd, ted, _ = SpatiotemporalFRDataset.from_hdf5('/storage/pyfr/big_bezier_dataset/annulus_medium_64x256.h5', 5, batch_size = 10, train_test_split=0.8, random_split=True, reshape_to_grid=True, retain_variable_dimension=True, normalization = 'full_field_mean_center', return_normalization_parameters=True)
+    trd, ted, _ = SpatiotemporalFRDataset.from_hdf5('/storage/pyfr/big_bezier_dataset/annulus_medium_64x256.h5', [True,False,True,False,True], batch_size = 10, train_test_split=0.8, random_split=True, reshape_to_grid=True, retain_variable_dimension=True, normalization = 'full_field_mean_center', return_normalization_parameters=True)
     trd.shuffle()
     _ = trd[0]
 

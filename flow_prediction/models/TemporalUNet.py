@@ -22,7 +22,6 @@ class TemporalConvBlock(tf.keras.layers.Layer):
         assert (padding_mode is None) or (padding_mode.lower() in ['constant', 'reflect', 'symmetric'])
         self.padding_mode = padding_mode.lower() if padding_mode is not None else 'constant'
 
-        
         self.normalization_1 = self._get_normalization_layer()
         self.conv_1 = self._get_conv_layer()
         self._conv1_paddings_size = _get_padding_sizes((self.kernel_size,self.kernel_size), include_time_dim=True)
@@ -96,7 +95,8 @@ class TemporalUpconvBlock(tf.keras.layers.Layer):
 
         ksize = (temporal_kernel_size, pool_size, pool_size)
         filters = _get_filter_count(layer_idx + 1, filters_root)
-        self.normalization = self.normalization_map[normalization](axis=2 if tf.keras.backend.image_data_format() == 'channels_first' else -1)
+        norm_axis=2 if tf.keras.backend.image_data_format() == 'channels_first' else -1
+        self.normalization = self.normalization_map[normalization](axis=norm_axis)
         self.upconv = tf.keras.layers.Conv3DTranspose(filters // 2,
                                             kernel_size=ksize,
                                             activation=activation,
