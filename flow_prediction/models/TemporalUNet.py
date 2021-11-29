@@ -81,7 +81,7 @@ class TemporalConvBlock(tf.keras.layers.Layer):
 
 class TemporalUpconvBlock(tf.keras.layers.Layer):
     normalization_map = {'batchnorm': tf.keras.layers.BatchNormalization, 'layernorm': tf.keras.layers.LayerNormalization, None: lambda *args,**kwargs: lambda x: x}
-    transpose_indices_map = {'channels_first': [0,2,1,3,4], 'channels_last': [0,4,2,3,1]}
+    transpose_indices_map = {'channels_first': [0,2,1,3,4], 'channels_last': [0,1,2,3,4]}
     def __init__(self, layer_idx, filters_root, temporal_kernel_size, pool_size, padding, activation, normalization = None, temporal_stride=1, **kwargs):
         super().__init__(**kwargs)
         self.layer_idx=layer_idx
@@ -219,7 +219,7 @@ def TemporalUNet(
                        activation=activation,
                        recurrent_activation=recurrent_activation,
                        normalization=normalization)
-
+    
     for layer_idx in range(0, layer_depth - 1):
         x = TemporalConvBlock(layer_idx, **conv_params)(x)
         contracting_layers[layer_idx] = x
@@ -254,15 +254,19 @@ def TemporalUNet(
 
 if __name__=='__main__':
     
-    tf.keras.backend.set_image_data_format('channels_first')
+    #tf.keras.backend.set_image_data_format('channels_first')
     
     nx = 64
     ny = 256
     nt = 10
     nc = 2
     bsize = 5
-    inp = tf.random.uniform((bsize,nt,nc,nx,ny))
 
+    if tf.keras.backend.image_data_format() == 'channels_first':
+        inp = tf.random.uniform((bsize,nt,nc,nx,ny))
+    else:
+        inp = tf.random.uniform((bsize,nt,nx,ny,nc))
+        
     model = TemporalUNet(nt=nt, nx=nx, ny=ny, in_channels=nc, out_channels=1, layer_depth=4, padding='same', filters_root=16)
     model.summary()
 

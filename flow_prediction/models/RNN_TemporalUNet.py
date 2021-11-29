@@ -109,7 +109,7 @@ class RNN_TemporalUNet(tf.keras.models.Model):
 
 if __name__=='__main__':
     
-    tf.keras.backend.set_image_data_format('channels_first')
+    #tf.keras.backend.set_image_data_format('channels_first')
 
 
     nf = 16
