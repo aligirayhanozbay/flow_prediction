@@ -1,6 +1,9 @@
 import numpy as np
 import tensorflow as tf
+from tensorflow.python.keras.engine.keras_tensor import KerasTensor as KerasTensor_tf
+from keras.engine.keras_tensor import KerasTensor
 import itertools
+import copy
 
 # Li Z, Kovachki N, Azizzadenesheli K, Liu B, Bhattacharya K, Stuart A, Anandkumar A. Fourier neural operator for parametric partial differential equations. arXiv preprint arXiv:2010.08895. 2020 Oct 18.
 
@@ -58,6 +61,11 @@ class SpectralConv(tf.keras.layers.Layer):
         var_shape = (2**(self.ndims-1), self.in_channels, self.out_channels, *self.modes)
 
         self.w = self.add_weight(shape = var_shape, initializer = initializer, dtype = tf.complex64, name='w')
+
+    def compute_output_shape(self, input_shape):
+        output_shape = list(copy.deepcopy(input_shape))
+        output_shape[1 if tf.keras.backend.image_data_format() == 'channels_first' else -1] = self.out_channels
+        return tf.TensorShape(output_shape)
 
     # Complex multiplication
     @tf.function
@@ -130,15 +138,108 @@ class SpectralConv(tf.keras.layers.Layer):
         return self.activation(out)
 
 
+class FNOBlock(tf.keras.models.Model):
+    _conv_layers = {1: tf.keras.layers.Conv1D,
+                    2: tf.keras.layers.Conv2D,
+                    3: tf.keras.layers.Conv3D}
+    def __init__(self, out_channels, modes, activation=None, conv_kernel_size=1, conv_layer_arguments=None):
+        super().__init__()
+        if conv_layer_arguments is None:
+            conv_layer_arguments = {}
+        self.spectralconv = SpectralConv(out_channels, modes)
+        self.conv = self._conv_layers[self.spectralconv.ndims](out_channels, conv_kernel_size, padding='same', **conv_layer_arguments)
+
+        if activation is None:
+            activation = 'gelu'
+        self.activation = tf.keras.activations.get(activation)
+
+    def call(self, x):
+        return self.activation(self.spectralconv(x) + self.conv(x))
+
+
+class PositionalEmbedding(tf.keras.layers.Layer):
+    _embedding_types = {'linear': lambda linspace: linspace,
+                        'cosine': lambda linspace: tf.cos(np.pi*linspace)}
+    def __init__(self, ndims, embedding_type=None):
+        super().__init__()
+        if embedding_type is None:
+            embedding_type = 'linear'
+        assert embedding_type in self._embedding_types
+        self.embedding_type = self._embedding_types[embedding_type]
+        self.ndims = ndims
+
+    def call(self, x):
+        xshape = tf.shape(x)
+        if tf.keras.backend.image_data_format() == 'channels_first':
+            spatial_dim_sizes = xshape[2:]
+        else:
+            spatial_dim_sizes = xshape[1:-1]
+        bsize = xshape[0]
+
+        directional_values = [self.embedding_type(tf.linspace(0.0, 1.0, spatial_dim_sizes[k])) for k in range(self.ndims)]
+        mg = tf.expand_dims(tf.stack(tf.meshgrid(*directional_values, indexing='ij'),-1 if tf.keras.backend.image_data_format() == 'channels_last' else 0),0)
+        mg = tf.tile(mg, [bsize] + [1 for _ in range(self.ndims+1)])
+
+        return tf.concat([x,mg],-1 if tf.keras.backend.image_data_format() == 'channels_last' else 1)
+
+def FNO(inp, out_channels, hidden_layer_channels, modes, hidden_layer_activations = None, conv_kernel_size = 1, conv_layer_arguments=None, n_blocks = 4, dense_activations = None, dense_units = None, positional_embedding_type = None):
+
+    ndims = len(modes)
+
+    if dense_activations is None:
+        dense_activations = [[None], [None, None]]
+    if dense_units is None:
+        dense_units = [[],[128]]
+    dense_units[0].append(hidden_layer_channels)
+    dense_units[1].append(out_channels)
+
+    if not (isinstance(inp, KerasTensor) or isinstance(inp, KerasTensor_tf)):
+        inp = tf.keras.layers.Input(inp)
+
+    x = PositionalEmbedding(ndims, embedding_type = positional_embedding_type)(inp)
+
+    if tf.keras.backend.image_data_format() == 'channels_first':
+        forward_transpose_indices = [0] + list(range(2,2+ndims)) + [1]
+        backward_transpose_indices = [0,ndims+1] + list(range(1,1+ndims))
+        x = tf.transpose(x, forward_transpose_indices)
+
+    for activ,units in zip(dense_activations[0], dense_units[0]):
+        x = tf.keras.layers.Dense(units, activation = activ)(x)
+
+    if tf.keras.backend.image_data_format() == 'channels_first':
+        x = tf.transpose(x, backward_transpose_indices)
+
+    for _ in range(n_blocks):
+        x = FNOBlock(hidden_layer_channels, modes, activation = hidden_layer_activations, conv_kernel_size = conv_kernel_size, conv_layer_arguments = conv_layer_arguments)(x)
+
+    if tf.keras.backend.image_data_format() == 'channels_first':
+        x = tf.transpose(x, forward_transpose_indices)
+
+    for activ,units in zip(dense_activations[1], dense_units[1]):
+        x = tf.keras.layers.Dense(units, activation=activ)(x)
+
+    if tf.keras.backend.image_data_format() == 'channels_first':
+        x = tf.transpose(x, backward_transpose_indices)
+
+    model = tf.keras.Model(inp,x)
+
+    return model
+    
+
+
 if __name__ == '__main__':
     tf.keras.backend.set_image_data_format('channels_first')
     bsize = 10
     nc = 4
     ns = [64,59,37]
+    modes = [16 for _ in ns]
     if tf.keras.backend.image_data_format() == 'channels_first':
-        inp = tf.random.uniform([bsize, nc, *ns])
+        inpshape = [bsize, nc, *ns]
     else:
-        inp = tf.random.uniform([bsize, *ns, nc])
+        inpshape = [bsize, *ns, nc]
+    inp = tf.random.uniform(inpshape)
 
-    lay = SpectralConv(13, [16 for _ in ns])
-    print(lay(inp).shape)
+    inpl = tf.keras.layers.Input(inpshape[1:])
+    mod = FNO(inpl, 2, 32, modes)
+    mod.summary()
+    
