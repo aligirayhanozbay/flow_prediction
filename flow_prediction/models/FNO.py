@@ -422,8 +422,10 @@ class FNOBlock(tf.keras.models.Model):
     _conv_layers = {1: tf.keras.layers.Conv1D,
                     2: tf.keras.layers.Conv2D,
                     3: tf.keras.layers.Conv3D}
-    def __init__(self, out_channels, modes, activation=None, conv_kernel_size=1, conv_layer_arguments=None, use_full_ffts=False):
+    normalization_map = {'batchnorm': tf.keras.layers.BatchNormalization, 'layernorm': tf.keras.layers.LayerNormalization, None: lambda *args,**kwargs: lambda x: x}
+    def __init__(self, out_channels, modes, activation=None, conv_kernel_size=1, conv_layer_arguments=None, use_full_ffts=False, normalization = None):
         super().__init__()
+        self.normalization = self.normalization_map[normalization](axis=1 if tf.keras.backend.image_data_format() == 'channels_first' else -1)
         if conv_layer_arguments is None:
             conv_layer_arguments = {}
         if use_full_ffts:
@@ -437,6 +439,7 @@ class FNOBlock(tf.keras.models.Model):
         self.activation = tf.keras.activations.get(activation)
 
     def call(self, x):
+        x = self.normalization(x)
         return self.activation(self.spectralconv(x) + self.conv(x))
 
 
@@ -465,7 +468,7 @@ class PositionalEmbedding(tf.keras.layers.Layer):
 
         return tf.concat([x,mg],-1 if tf.keras.backend.image_data_format() == 'channels_last' else 1)
 
-def FNO(inp, out_channels, hidden_layer_channels, modes, hidden_layer_activations = None, conv_kernel_size = 1, conv_layer_arguments=None, n_blocks = 4, dense_activations = None, dense_units = None, positional_embedding_type = None):
+def FNO(inp, out_channels, hidden_layer_channels, modes, hidden_layer_activations = None, conv_kernel_size = 1, conv_layer_arguments=None, n_blocks = 4, dense_activations = None, dense_units = None, positional_embedding_type = None, final_activation = None, return_layer = False):
 
     ndims = len(modes)
 
@@ -473,6 +476,8 @@ def FNO(inp, out_channels, hidden_layer_channels, modes, hidden_layer_activation
         dense_activations = [[None], [None, None]]
     if dense_units is None:
         dense_units = [[],[128]]
+    if final_activation is None:
+        final_activation = 'linear'
     dense_units[0].append(hidden_layer_channels)
     dense_units[1].append(out_channels)
 
@@ -492,8 +497,10 @@ def FNO(inp, out_channels, hidden_layer_channels, modes, hidden_layer_activation
     if tf.keras.backend.image_data_format() == 'channels_first':
         x = tf.transpose(x, backward_transpose_indices)
 
-    for _ in range(n_blocks):
+    for _ in range(n_blocks-1):
         x = FNOBlock(hidden_layer_channels, modes, activation = hidden_layer_activations, conv_kernel_size = conv_kernel_size, conv_layer_arguments = conv_layer_arguments, use_full_ffts = len(modes) > 2)(x)
+
+    x = FNOBlock(hidden_layer_channels, modes, activation = final_activation, conv_kernel_size = conv_kernel_size, conv_layer_arguments = conv_layer_arguments, use_full_ffts = len(modes) > 2)(x)
 
     if tf.keras.backend.image_data_format() == 'channels_first':
         x = tf.transpose(x, forward_transpose_indices)
@@ -504,9 +511,11 @@ def FNO(inp, out_channels, hidden_layer_channels, modes, hidden_layer_activation
     if tf.keras.backend.image_data_format() == 'channels_first':
         x = tf.transpose(x, backward_transpose_indices)
 
-    model = tf.keras.Model(inp,x)
-
-    return model
+    if return_layer:
+        return x
+    else:
+        model = tf.keras.Model(inp,x)
+        return model
     
 
 
