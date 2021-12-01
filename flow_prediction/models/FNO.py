@@ -291,7 +291,17 @@ class SpectralConv(tf.keras.layers.Layer):
 
         var_shape = self._get_weight_shape()
 
+        #cannot use complex weight directly due to tf bug - cant use both complex and float weights
+        #in a model when using tf.distribute.MirroredStrategy...
         self.w = self.add_weight(shape = var_shape, initializer = initializer, dtype = tf.complex64, name='w')
+    #     self.wreal = self.add_weight(shape = var_shape, initializer = initializer, dtype = tf.keras.backend.floatx(), name='wreal')
+    #     self.wimag = self.add_weight(shape = var_shape, initializer = initializer, dtype = tf.keras.backend.floatx(), name='wimag')
+    #     self._complex_dtype = 'complex128' if tf.keras.backend.floatx() == 'float64' else 'float32'
+
+    # @property
+    # @tf.function
+    # def w(self):
+    #     return tf.cast(self.wreal, self._complex_dtype) + 1j*tf.cast(self.wimag, self._complex_dtype)
 
     def compute_output_shape(self, input_shape):
         output_shape = list(copy.deepcopy(input_shape))
@@ -549,7 +559,7 @@ if __name__ == '__main__':
     mask = tf.math.real(diff * tf.math.conj(diff)) < 1e-4
     check_result = 'Passed' if bool(tf.reduce_all(mask)) else 'Failed'
     print('Full FFT vs RFFT version identical answer check: ' + check_result)
-
+    
     inpl = tf.keras.layers.Input(inpshape[1:])
     mod = FNO(inpl, no, 32, modes)
     mod.summary()
@@ -563,9 +573,9 @@ if __name__ == '__main__':
         return grads
 
     grads_fn = get_gradients_function(mod, tf.keras.losses.MeanSquaredError())
-    grads = grads_fn(inp,tar)
-    check_result = 'Passed' if bool(tf.reduce_all([tf.reduce_all(tf.math.is_finite(grads)) for g in grads])) else 'Failed'
-    print('FNO model gradients check: ' + check_result)
+    pred, grads = grads_fn(inp,tar)
+    check_result = 'Passed' if bool(tf.reduce_all([tf.reduce_all(np.isfinite(g.numpy())) for g in grads])) else 'Failed'
+    print('FNO model gradients nan check: ' + check_result)
     if check_result == 'Failed':
         print('Launching debugger')
         import pdb; pdb.set_trace()

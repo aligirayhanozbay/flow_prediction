@@ -29,10 +29,12 @@ if 'reduce_lr' in config['training']:
 if 'early_stopping' in config['training']:
     callbacks.append(tf.keras.callbacks.EarlyStopping(**config['training']['early_stopping']))
 
-distribute_strategy =  tf.distribute.MirroredStrategy()
-with distribute_strategy.scope():
-    model = SD_FNO(input_units, grid_shape, out_channels = output_channels, **config['model'])
-    model.summary()
-    loss_fn = get_loss(config['training']['loss'])
-    model.compile(loss=loss_fn, optimizer = tf.keras.optimizers.get(config['training']['optimizer']), metrics = config['training'].get('metrics', None))
-    model.fit(train_dataset, epochs = config['training']['epochs'], validation_data = test_dataset, callbacks = callbacks)
+#cannot use complex weight directly due to tf bug - cant use both complex and float weights
+#in a model when using tf.distribute.MirroredStrategy...
+# distribute_strategy =  tf.distribute.MirroredStrategy()
+# with distribute_strategy.scope():
+model = SD_FNO(input_units, grid_shape, out_channels = output_channels, **config['model'])
+model.summary()
+loss_fn = get_loss(config['training']['loss'])
+model.compile(loss=loss_fn, optimizer = tf.keras.optimizers.get(config['training']['optimizer']), metrics = config['training'].get('metrics', None))
+model.fit(train_dataset, epochs = config['training']['epochs'], validation_data = test_dataset, callbacks = callbacks)
