@@ -1,9 +1,13 @@
 import numpy as np
 import tensorflow as tf
-from tensorflow.python.keras.engine.keras_tensor import KerasTensor as KerasTensor_tf
-from keras.engine.keras_tensor import KerasTensor
+try:
+    from tensorflow.python.keras.engine.keras_tensor import KerasTensor as KerasTensor_tf
+    from keras.engine.keras_tensor import KerasTensor
+except:
+    from tensorflow.python.keras.engine.keras_tensor import KerasTensor as KerasTensor
 import itertools
 import copy
+import warnings
 
 # Li Z, Kovachki N, Azizzadenesheli K, Liu B, Bhattacharya K, Stuart A, Anandkumar A. Fourier neural operator for parametric partial differential equations. arXiv preprint arXiv:2010.08895. 2020 Oct 18.
 
@@ -19,6 +23,220 @@ def complex_uniform_initializer(scale=0.05):
         imag = real_initializer(shape,dtype)
         return tf.dtypes.complex(real,imag)
     return initializer
+
+@tf.function(experimental_relax_shapes=True)
+def _rfft_tensor_to_fft_1d(w, n_leading_dims = 0, final_dim_even_length=False):
+    rank_w = tf.rank(w)
+    shape_w = tf.shape(w)
+    even_length_wsize_reduction = tf.cast(final_dim_even_length, shape_w.dtype)
+    wsize = shape_w[-1] - 1 - even_length_wsize_reduction
+    wstar = tf.reverse(tf.math.conj(w[...,1:1+wsize]),[-1])
+    wp = tf.concat([w,wstar],-1)
+    return wp
+
+@tf.function(experimental_relax_shapes=True)
+def _rfft_tensor_to_fft_2d(w, n_leading_dims = 0, final_dim_even_length=False):
+    rank_w = tf.rank(w)
+    shape_w = tf.shape(w)
+    even_length_wsize_reduction = tf.cast(final_dim_even_length, shape_w.dtype)
+    wsize = shape_w[-1] - 1 - even_length_wsize_reduction
+
+    w0_sl_start = tf.zeros((rank_w,), dtype=shape_w.dtype)
+    w0_sl_size = tf.concat([
+        shape_w[:n_leading_dims],
+        [1],
+        shape_w[n_leading_dims+1:]
+    ],0)
+    w0 = tf.slice(w, w0_sl_start, w0_sl_size)
+    w0p = _rfft_tensor_to_fft_1d(tf.squeeze(w0,n_leading_dims), n_leading_dims = n_leading_dims, final_dim_even_length = final_dim_even_length)
+    w0p = tf.expand_dims(w0p, n_leading_dims)
+
+    w1_sl_start = tf.concat([
+        tf.zeros((n_leading_dims,), dtype = shape_w.dtype),
+        [1],
+        tf.zeros((rank_w-n_leading_dims-2), dtype=shape_w.dtype),
+        [1]
+    ],0)
+    w1_sl_size = tf.concat([
+        shape_w[:n_leading_dims],
+        [shape_w[n_leading_dims]-1],
+        shape_w[n_leading_dims+1:-1],
+        [wsize]
+    ],0)
+    w1 = tf.slice(w, w1_sl_start, w1_sl_size)
+    rev_order = tf.range(n_leading_dims, rank_w)
+    w1p = tf.math.conj(tf.reverse(w1, rev_order))
+
+    leading_terms_sl_start = tf.concat([
+        tf.zeros((n_leading_dims,), dtype = shape_w.dtype),
+        [1],
+        tf.zeros((rank_w-n_leading_dims-2), dtype=shape_w.dtype),
+        [0]
+    ],0)
+    leading_terms_sl_size = tf.concat([
+        shape_w[:n_leading_dims],
+        [shape_w[n_leading_dims]-1],
+        shape_w[n_leading_dims+1:-1],
+        [1]
+    ],0)
+    leading_terms = tf.slice(w, leading_terms_sl_start, leading_terms_sl_size)
+
+    middle_terms_sl_start = tf.concat([
+        tf.zeros((n_leading_dims,), dtype = shape_w.dtype),
+        [1],
+        tf.zeros((rank_w-n_leading_dims-2), dtype=shape_w.dtype),
+        [1+wsize]
+    ],0)
+    middle_terms_sl_size = tf.concat([
+        shape_w[:n_leading_dims],
+        [shape_w[n_leading_dims]-1],
+        shape_w[n_leading_dims+1:-1],
+        [even_length_wsize_reduction]
+    ],0)
+    middle_terms = tf.slice(w, middle_terms_sl_start, middle_terms_sl_size)
+
+    return tf.concat([w0p,tf.concat([leading_terms, w1, middle_terms, w1p],-1)],n_leading_dims)
+
+@tf.function(experimental_relax_shapes=True)
+def _rfft_tensor_to_fft_3d(w, n_leading_dims = 0, final_dim_even_length=False): 
+    rank_w = tf.rank(w)
+    shape_w = tf.shape(w)
+    even_length_wsize_reduction = tf.cast(final_dim_even_length, shape_w.dtype)
+    wsize = shape_w[-1] - 1 - even_length_wsize_reduction
+
+    w0_sl_start = tf.zeros((rank_w,), dtype=shape_w.dtype)
+    w0_sl_size = tf.concat([
+        shape_w[:n_leading_dims],
+        [1],
+        shape_w[n_leading_dims+1:]
+    ],0)
+    w0 = tf.slice(w, w0_sl_start, w0_sl_size)
+    w0p = _rfft_tensor_to_fft_2d(tf.squeeze(w0,n_leading_dims), n_leading_dims = n_leading_dims, final_dim_even_length = final_dim_even_length)
+    w0p = tf.expand_dims(w0p, n_leading_dims)
+
+    w1_sl_start = tf.concat([
+        tf.zeros((n_leading_dims,), dtype = shape_w.dtype),
+        [1],
+        tf.zeros((rank_w-n_leading_dims-2), dtype=shape_w.dtype),
+        [1]
+    ],0)
+    w1_sl_size = tf.concat([
+        shape_w[:n_leading_dims],
+        [shape_w[n_leading_dims]-1],
+        shape_w[n_leading_dims+1:-1],
+        [wsize]
+    ],0)
+    w1 = tf.slice(w, w1_sl_start, w1_sl_size)
+    rev_order = [4,2]
+    w1p = tf.math.conj(tf.reverse(w1, rev_order))
+    w1p = tf.concat([w1p[...,:,:1,:],tf.reverse(w1p[...,:,1:,:],[3])],3)
+
+    leading_terms_sl_start = tf.concat([
+        tf.zeros((n_leading_dims,), dtype = shape_w.dtype),
+        [1],
+        tf.zeros((rank_w-n_leading_dims-2), dtype=shape_w.dtype),
+        [0]
+    ],0)
+    leading_terms_sl_size = tf.concat([
+        shape_w[:n_leading_dims],
+        [shape_w[n_leading_dims]-1],
+        shape_w[n_leading_dims+1:-1],
+        [1]
+    ],0)
+    leading_terms = tf.slice(w, leading_terms_sl_start, leading_terms_sl_size)
+
+    middle_terms_sl_start = tf.concat([
+        tf.zeros((n_leading_dims,), dtype = shape_w.dtype),
+        [1],
+        tf.zeros((rank_w-n_leading_dims-2), dtype=shape_w.dtype),
+        [1+wsize]
+    ],0)
+    middle_terms_sl_size = tf.concat([
+        shape_w[:n_leading_dims],
+        [shape_w[n_leading_dims]-1],
+        shape_w[n_leading_dims+1:-1],
+        [even_length_wsize_reduction]
+    ],0)
+    middle_terms = tf.slice(w, middle_terms_sl_start, middle_terms_sl_size)
+
+    return tf.concat([w0p,tf.concat([leading_terms, w1, middle_terms, w1p],-1)],n_leading_dims)
+    
+
+# @tf.function(experimental_relax_shapes=True)
+# def _rfft_tensor_to_fft(w, n_leading_dims = 0, final_dim_even_length=False):
+#     #recursive version - for 1,2 or 3d. does not work with tf < 2.7 due to bugs.
+#     rank_w = tf.rank(w)
+#     shape_w = tf.shape(w)
+#     even_length_wsize_reduction = tf.cast(final_dim_even_length, shape_w.dtype)
+#     wsize = shape_w[-1] - 1 - even_length_wsize_reduction
+#     if rank_w == n_leading_dims + 1:
+#         wstar = tf.reverse(tf.math.conj(w[...,1:1+wsize]),[-1])
+#         wp = tf.concat([w,wstar],-1)
+#         return wp
+#     elif rank_w > n_leading_dims + 1:
+#         w0_sl_start = tf.zeros((rank_w,), dtype=shape_w.dtype)
+#         w0_sl_size = tf.concat([
+#             shape_w[:n_leading_dims],
+#             [1],
+#             shape_w[n_leading_dims+1:]
+#         ],0)
+#         w0 = tf.slice(w, w0_sl_start, w0_sl_size)
+#         w0p = _rfft_tensor_to_fft(tf.squeeze(w0,n_leading_dims), n_leading_dims = n_leading_dims, final_dim_even_length = final_dim_even_length)
+#         w0p = tf.expand_dims(w0p, n_leading_dims)
+        
+#         w1_sl_start = tf.concat([
+#             tf.zeros((n_leading_dims,), dtype = shape_w.dtype),
+#             [1],
+#             tf.zeros((rank_w-n_leading_dims-2), dtype=shape_w.dtype),
+#             [1]
+#         ],0)
+#         w1_sl_size = tf.concat([
+#             shape_w[:n_leading_dims],
+#             [shape_w[n_leading_dims]-1],
+#             shape_w[n_leading_dims+1:-1],
+#             [wsize]
+#         ],0)
+#         w1 = tf.slice(w, w1_sl_start, w1_sl_size)
+#         if rank_w == n_leading_dims + 2:
+#             rev_order = tf.range(n_leading_dims, rank_w)
+#             w1p = tf.math.conj(tf.reverse(w1, rev_order))
+#         elif rank_w == n_leading_dims + 3:
+#             rev_order = [4,2]
+#             w1p = tf.math.conj(tf.reverse(w1, rev_order))
+#             w1p = tf.concat([w1p[...,:,:1,:],tf.reverse(w1p[...,:,1:,:],[3])],3)
+        
+#         leading_terms_sl_start = tf.concat([
+#             tf.zeros((n_leading_dims,), dtype = shape_w.dtype),
+#             [1],
+#             tf.zeros((rank_w-n_leading_dims-2), dtype=shape_w.dtype),
+#             [0]
+#         ],0)
+#         leading_terms_sl_size = tf.concat([
+#             shape_w[:n_leading_dims],
+#             [shape_w[n_leading_dims]-1],
+#             shape_w[n_leading_dims+1:-1],
+#             [1]
+#         ],0)
+#         leading_terms = tf.slice(w, leading_terms_sl_start, leading_terms_sl_size)
+
+#         middle_terms_sl_start = tf.concat([
+#             tf.zeros((n_leading_dims,), dtype = shape_w.dtype),
+#             [1],
+#             tf.zeros((rank_w-n_leading_dims-2), dtype=shape_w.dtype),
+#             [1+wsize]
+#         ],0)
+#         middle_terms_sl_size = tf.concat([
+#             shape_w[:n_leading_dims],
+#             [shape_w[n_leading_dims]-1],
+#             shape_w[n_leading_dims+1:-1],
+#             [even_length_wsize_reduction]
+#         ],0)
+#         middle_terms = tf.slice(w, middle_terms_sl_start, middle_terms_sl_size)
+
+#         return tf.concat([w0p,tf.concat([leading_terms, w1, middle_terms, w1p],-1)],n_leading_dims)
+        
+#     else:
+#         raise(ValueError('Expected w to have rank > n_leading_dims'))
 
 ################################################################
 # fourier layer
@@ -36,7 +254,8 @@ class SpectralConv(tf.keras.layers.Layer):
     }
     def __init__(self, out_channels, modes, activation=None):
         super().__init__()
-        
+
+        self.in_channels = None
         self.out_channels = out_channels
         self.modes = [int(x) for x in modes] #Number of Fourier modes to multiply, at most floor(N/2) + 1
         self.ndims = len(self.modes)
@@ -50,6 +269,9 @@ class SpectralConv(tf.keras.layers.Layer):
         
         self.activation = tf.keras.activations.get(activation)
 
+    def _get_weight_shape(self):
+        return (2**(self.ndims-1), self.in_channels, self.out_channels, *self.modes)
+
     def build(self, input_shape):
         if tf.keras.backend.image_data_format() == 'channels_first':
             self.in_channels = input_shape[1]
@@ -58,7 +280,7 @@ class SpectralConv(tf.keras.layers.Layer):
         self.scale = (1 / (self.in_channels * self.out_channels))
         initializer = complex_uniform_initializer(self.scale)
 
-        var_shape = (2**(self.ndims-1), self.in_channels, self.out_channels, *self.modes)
+        var_shape = self._get_weight_shape()
 
         self.w = self.add_weight(shape = var_shape, initializer = initializer, dtype = tf.complex64, name='w')
 
@@ -72,13 +294,6 @@ class SpectralConv(tf.keras.layers.Layer):
     def compl_mul(self, inp, weights):
         # (fft corner, batch, in_channel, x0, x1, ...), (fft corner, in_channel, out_channel, x0, x1, ...) -> (fft corner, batch, out_channel, x0, x1, ...)
         return tf.einsum("wbi...,wio...->w...bo", inp, weights)
-
-    @staticmethod
-    @tf.function
-    def _get_fft_out_size(input_shape):
-        final_spatial_dim_size = input_shape[-1]
-        other_dims_size = input_shape[2:-1]
-        return tf.concat([other_dims_size, [(final_spatial_dim_size//2)+1]],0)
 
     def _build_wr_slicing_modes(self):
         #fft bins are placed at the half of the vertices of an n-dimensional cube.
@@ -117,7 +332,6 @@ class SpectralConv(tf.keras.layers.Layer):
         
         xshape = tf.shape(x)
         batchsize = xshape[0]
-        fft_out_size = self._get_fft_out_size(xshape)
         
         #Compute Fourier coeffcients up to factor of e^(- something constant)
         x_ft = self._fft_funcs[self.ndims]['rfft'](x)
@@ -137,16 +351,76 @@ class SpectralConv(tf.keras.layers.Layer):
             
         return self.activation(out)
 
+class SpectralConv_RealFullFFT(SpectralConv):
+    #Slower version of the spectral conv using full FFTs.
+    #Necessary for 3D since TF does not have gradients for rfft3d/irfft3d...
+    _fft_funcs = {
+        1:{'fft': tf.signal.fft, 'ifft': tf.signal.ifft},
+        2:{'fft': tf.signal.fft2d, 'ifft': tf.signal.ifft2d},
+        3:{'fft': tf.signal.fft3d, 'ifft': tf.signal.ifft3d}
+    }
+    _rfft_to_fft_funcs = {
+        1: _rfft_tensor_to_fft_1d,
+        2: _rfft_tensor_to_fft_2d,
+        3: _rfft_tensor_to_fft_3d
+    }
+
+    @staticmethod
+    @tf.function
+    def _get_rfft_out_size(input_shape):
+        final_spatial_dim_size = input_shape[-1]
+        other_dims_size = input_shape[2:-1]
+        return tf.concat([other_dims_size, [(final_spatial_dim_size//2)+1]],0)
+            
+
+    def call(self, x):
+        x = tf.cast(x, 'complex64')
+        
+        if tf.keras.backend.image_data_format() == 'channels_last':
+            x = tf.transpose(x, self._image_data_format_transpose_idxs)
+            
+        xshape = tf.shape(x)
+        batchsize = xshape[0]
+        fft_out_size = xshape[2:]
+        final_dim_even_length = tf.logical_not(tf.cast(xshape[-1]%2, tf.bool))
+        rfft_out_size = self._get_rfft_out_size(xshape)
+
+        #Compute Fourier coeffcients up to factor of e^(- something constant)
+        x_ft = self._fft_funcs[self.ndims]['fft'](x)
+
+        wr,scatter_ind,_ = self._wr_slice(x_ft)
+        wr = self.compl_mul(wr, self.w)
+        rfft_tensor_size = tf.concat([rfft_out_size, [batchsize, self.out_channels]],0)
+        out_rfft = tf.scatter_nd(scatter_ind, wr, rfft_tensor_size)
+        out_rfft = tf.transpose(out_rfft, self._transpose_indices[self.ndims])
+
+        #Return to physical space
+        out_fft = self._rfft_to_fft_funcs[self.ndims](
+            out_rfft,
+            n_leading_dims = 2,
+            final_dim_even_length = final_dim_even_length)
+        out = self._fft_funcs[self.ndims]['ifft'](out_fft)
+        
+        if tf.keras.backend.image_data_format() == 'channels_last':
+            out = tf.transpose(out, self._image_data_format_rev_transpose_idxs)
+
+        out = tf.cast(out, tf.keras.backend.floatx())
+
+        return self.activation(out)
+
 
 class FNOBlock(tf.keras.models.Model):
     _conv_layers = {1: tf.keras.layers.Conv1D,
                     2: tf.keras.layers.Conv2D,
                     3: tf.keras.layers.Conv3D}
-    def __init__(self, out_channels, modes, activation=None, conv_kernel_size=1, conv_layer_arguments=None):
+    def __init__(self, out_channels, modes, activation=None, conv_kernel_size=1, conv_layer_arguments=None, use_full_ffts=False):
         super().__init__()
         if conv_layer_arguments is None:
             conv_layer_arguments = {}
-        self.spectralconv = SpectralConv(out_channels, modes)
+        if use_full_ffts:
+            self.spectralconv = SpectralConv_RealFullFFT(out_channels, modes)
+        else:
+            self.spectralconv = SpectralConv(out_channels, modes)
         self.conv = self._conv_layers[self.spectralconv.ndims](out_channels, conv_kernel_size, padding='same', **conv_layer_arguments)
 
         if activation is None:
@@ -210,7 +484,7 @@ def FNO(inp, out_channels, hidden_layer_channels, modes, hidden_layer_activation
         x = tf.transpose(x, backward_transpose_indices)
 
     for _ in range(n_blocks):
-        x = FNOBlock(hidden_layer_channels, modes, activation = hidden_layer_activations, conv_kernel_size = conv_kernel_size, conv_layer_arguments = conv_layer_arguments)(x)
+        x = FNOBlock(hidden_layer_channels, modes, activation = hidden_layer_activations, conv_kernel_size = conv_kernel_size, conv_layer_arguments = conv_layer_arguments, use_full_ffts = len(modes) > 2)(x)
 
     if tf.keras.backend.image_data_format() == 'channels_first':
         x = tf.transpose(x, forward_transpose_indices)
@@ -231,15 +505,50 @@ if __name__ == '__main__':
     tf.keras.backend.set_image_data_format('channels_first')
     bsize = 10
     nc = 4
+    no = 2
     ns = [64,59,37]
     modes = [16 for _ in ns]
     if tf.keras.backend.image_data_format() == 'channels_first':
         inpshape = [bsize, nc, *ns]
+        outshape = [bsize, no, *ns]
     else:
         inpshape = [bsize, *ns, nc]
+        outshape = [bsize, *ns, no]
     inp = tf.random.uniform(inpshape)
+    tar = tf.random.uniform(outshape)
+
+    lay1 = SpectralConv(no,modes)
+    lay1.build(inpshape)
+    lay2 = SpectralConv_RealFullFFT(no,modes)
+    lay2.build(inpshape)
+    _ = lay1(inp)
+    _ = lay2(inp)
+    lay2.set_weights(lay1.get_weights())
+    
+    o1 = lay1(inp)
+    o2 = lay2(inp)
+    diff = o1 - o2
+    mask = tf.math.real(diff * tf.math.conj(diff)) < 1e-4
+    check_result = 'Passed' if bool(tf.reduce_all(mask)) else 'Failed'
+    print('Full FFT vs RFFT version identical answer check: ' + check_result)
 
     inpl = tf.keras.layers.Input(inpshape[1:])
-    mod = FNO(inpl, 2, 32, modes)
+    mod = FNO(inpl, no, 32, modes)
     mod.summary()
+
+    def get_gradients_function(layer, loss_fn):
+        @tf.function
+        def grads(x, t):
+            y = layer(x)
+            loss = loss_fn(t, y)
+            return y, tf.gradients(loss, layer.trainable_variables)
+        return grads
+
+    grads_fn = get_gradients_function(mod, tf.keras.losses.MeanSquaredError())
+    grads = grads_fn(inp,tar)
+    check_result = 'Passed' if bool(tf.reduce_all([tf.reduce_all(tf.math.is_finite(grads)) for g in grads])) else 'Failed'
+    print('FNO model gradients check: ' + check_result)
+    if check_result == 'Failed':
+        print('Launching debugger')
+        import pdb; pdb.set_trace()
     
