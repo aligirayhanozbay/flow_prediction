@@ -36,6 +36,15 @@ def _rfft_tensor_to_fft_1d(w, n_leading_dims = 0, final_dim_even_length=False):
 
 @tf.function(experimental_relax_shapes=True)
 def _rfft_tensor_to_fft_2d(w, n_leading_dims = 0, final_dim_even_length=False):
+    #Illustration of internal variables for a 6x4 FFT
+    #* * * * * * -> w0p
+    #-----------
+    #*|* *|*|* *
+    #*|* *|*|* * -> w1p
+    #*|* *|*|* *
+    #|  w1 |
+    #|     ----> middle_terms
+    #----------> leading_terms
     rank_w = tf.rank(w)
     shape_w = tf.shape(w)
     even_length_wsize_reduction = tf.cast(final_dim_even_length, shape_w.dtype)
