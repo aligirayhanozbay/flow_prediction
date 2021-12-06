@@ -87,6 +87,7 @@ class TemporalUpconvBlock(tf.keras.layers.Layer):
         self.layer_idx=layer_idx
         self.filters_root=filters_root
         self.temporal_kernel_size=temporal_kernel_size
+        self.temporal_stride=temporal_stride
         self.pool_size=pool_size
         self.activation=activation
 
@@ -96,11 +97,12 @@ class TemporalUpconvBlock(tf.keras.layers.Layer):
         ksize = (temporal_kernel_size, pool_size, pool_size)
         filters = _get_filter_count(layer_idx + 1, filters_root)
         norm_axis=2 if tf.keras.backend.image_data_format() == 'channels_first' else -1
-        self.normalization = self.normalization_map[normalization](axis=norm_axis)
+        self._normalization_str = normalization
+        self.normalization = self.normalization_map[self._normalization_str](axis=norm_axis)
         self.upconv = tf.keras.layers.Conv3DTranspose(filters // 2,
                                             kernel_size=ksize,
                                             activation=activation,
-                                            strides=(temporal_stride,pool_size,pool_size),
+                                            strides=(self.temporal_stride,pool_size,pool_size),
                                             padding=self.padding)
 
         self._transpose_indices = self.transpose_indices_map[tf.keras.backend.image_data_format()]
@@ -121,9 +123,9 @@ class TemporalUpconvBlock(tf.keras.layers.Layer):
                     pool_size=self.pool_size,
                     padding=self.padding,
                     activation=self.activation,
-                    padding_mode=self.padding_mode
-                    **super().get_config(),
-                    )
+                    normalization=self._normalization_str,
+                    temporal_stride=self.temporal_stride,
+                    **super().get_config())
 
 class TemporalUNetCropConcatBlock(tf.keras.layers.Layer):
 
