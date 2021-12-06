@@ -278,6 +278,15 @@ class SpectralConv(tf.keras.layers.Layer):
         
         self.activation = tf.keras.activations.get(activation)
 
+    def get_config(self):
+        config = super().get_config().copy()
+        config.update({
+            'out_channels': self.out_channels,
+            'modes': self.modes,
+            'activation': self.activation
+        })
+        return config
+
     def _get_weight_shape(self):
         return (2**(self.ndims-1), self.in_channels, self.out_channels, *self.modes)
 
@@ -463,6 +472,11 @@ class PositionalEmbedding(tf.keras.layers.Layer):
         assert embedding_type in self._embedding_types
         self.embedding_type = self._embedding_types[embedding_type]
         self.ndims = ndims
+
+    def get_config(self):
+        config = super().get_config().copy()
+        config.update({'ndims': self.ndims, 'embedding_type':self.embedding_type})
+        return config
 
     def call(self, x):
         xshape = tf.shape(x)

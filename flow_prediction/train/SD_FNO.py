@@ -23,7 +23,7 @@ output_channels = dummy_output.shape[1]
 grid_shape = dummy_output.shape[2:]
 del dummy_input, dummy_output
 
-callbacks = [tf.keras.callbacks.ModelCheckpoint(args.checkpoint_path, save_best_only=True)]
+callbacks = [tf.keras.callbacks.ModelCheckpoint(args.checkpoint_path, save_best_only=True, save_weights_only=True)]
 if 'reduce_lr' in config['training']:
     callbacks.append(tf.keras.callbacks.ReduceLROnPlateau(**config['training']['reduce_lr']))
 if 'early_stopping' in config['training']:
