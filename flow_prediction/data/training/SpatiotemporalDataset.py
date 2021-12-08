@@ -161,8 +161,6 @@ class SpatiotemporalFRDataset(tf.keras.utils.Sequence):
                 tensor = getattr(self,tn)[sample[0],sample[1]]
                 if tn == 'sensor_values':
                     tensor = np.einsum('t...,t->t...',tensor,self.temporal_window)
-                elif tn == 'full_field_values' and tf.keras.backend.image_data_format() == 'channels_last':
-                    tensor = tensor.transpose([0,1,3,4,2])
                 rt.append(tensor)
         return_tensors = [np.stack(x,0).astype(tf.keras.backend.floatx()) for x in return_tensors]
             
@@ -180,7 +178,7 @@ class SpatiotemporalFRDataset(tf.keras.utils.Sequence):
 
 if __name__ == '__main__':
     
-    trd, ted, _ = SpatiotemporalFRDataset.from_hdf5('/storage/pyfr/big_bezier_dataset/annulus_medium_64x256.h5', [True,False,True,False,True], batch_size = 10, train_test_split=0.8, random_split=True, reshape_to_grid=True, retain_variable_dimension=True, normalization = 'full_field_mean_center', return_normalization_parameters=True)
+    trd, ted, _ = SpatiotemporalFRDataset.from_hdf5('/storage/pyfr/big_bezier_dataset/annulus_medium_64x256.h5', [1,0,1,0,1], batch_size = 10, train_test_split=0.8, random_split=True, reshape_to_grid=True, retain_variable_dimension=True, normalization = 'full_field_mean_center', return_normalization_parameters=True)
     trd.shuffle()
     _ = trd[0]
 
