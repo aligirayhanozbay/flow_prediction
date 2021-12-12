@@ -44,7 +44,7 @@ class SpatiotemporalFRDataset(tf.keras.utils.Sequence):
     _train_test_split_method_axes = {'case':0, None:0,'time':1}
     _numeric_dtypes = [np.float16, np.float32, np.float64, np.int16, np.int32, np.int64]
     _float_dtypes = [np.float16, np.float32, np.float64]
-    def __init__(self, temporal_window, batch_size, sensor_values, full_field_values, normalization_params = None, case_names = None, case_ids = None):
+    def __init__(self, temporal_window, batch_size, sensor_values, full_field_values, normalization_params = None, case_names = None, case_ids = None, temporal_stride=1):
         super().__init__()
 
         self.batch_size = batch_size
@@ -59,7 +59,7 @@ class SpatiotemporalFRDataset(tf.keras.utils.Sequence):
         assert len(self.temporal_window.shape) == 1
         
             
-
+        self.temporal_stride = temporal_stride
         self._case_temporal_indices = self._generate_per_sample_case_temporal_indices()
         assert len(self._case_temporal_indices) == self.n_samples
         self._make_batch_indices()
@@ -103,17 +103,20 @@ class SpatiotemporalFRDataset(tf.keras.utils.Sequence):
 
     @property
     def n_samples(self):
-        return self.n_cases * (self.n_timesteps + 1 - self.temporal_window_size)
+        return self.n_cases * (self.n_timesteps-1-self.temporal_stride*(self.temporal_window_size-1))
     
     def __len__(self):
         return int(np.ceil(self.n_samples/self.batch_size))
 
     def _generate_per_sample_case_temporal_indices(self):
         case_idxs = np.arange(self.n_cases)
-        t_idxs = tuple(zip(
-            np.arange(self.n_timesteps-self.temporal_window_size+1),
-            np.arange(self.temporal_window_size, self.n_timesteps+1)
-        ))
+        tstarts = np.arange(self.n_timesteps-1-self.temporal_stride*(self.temporal_window_size-1))
+        tends = tstarts + self.temporal_stride*(self.temporal_window_size-1) + 1
+        t_idxs = tuple(zip(tstarts, tends))
+        #t_idxs = tuple(zip(
+        #    np.arange(self.n_timesteps-self.temporal_window_size+1),
+        #    np.arange(self.temporal_window_size, self.n_timesteps+1)
+        #))
         indices_per_sample = tuple(itertools.product(case_idxs, t_idxs))
         return indices_per_sample
 
@@ -127,7 +130,7 @@ class SpatiotemporalFRDataset(tf.keras.utils.Sequence):
         self._case_temporal_indices = tuple(self._case_temporal_indices)
         
     @classmethod
-    def from_hdf5(cls, h5path, temporal_window, batch_size=1, train_test_split = None, train_test_split_type = None, rand_seed=None, random_split=False, return_normalization_parameters = False, return_case_ids = False, return_case_names = False, dataset_kwargs = None, **extraction_kwargs):
+    def from_hdf5(cls, h5path, temporal_window, batch_size=1, train_test_split = None, train_test_split_type = None, rand_seed=None, random_split=False, return_normalization_parameters = False, return_case_ids = False, return_case_names = False, temporal_stride=1, dataset_kwargs = None, **extraction_kwargs):
 
         if dataset_kwargs is None:
             dataset_kwargs = {}
@@ -150,22 +153,22 @@ class SpatiotemporalFRDataset(tf.keras.utils.Sequence):
                                                 return_normalization_parameters=return_normalization_parameters,
                                                 return_case_names=return_case_names,
                                                 return_case_ids=return_case_ids)
-            train_dset = cls(temporal_window, batch_size, **train_init_arrays, **dataset_kwargs)
-            test_dset = cls(temporal_window, batch_size, **test_init_arrays, **dataset_kwargs)
+            train_dset = cls(temporal_window, batch_size, temporal_stride=temporal_stride, **train_init_arrays, **dataset_kwargs)
+            test_dset = cls(temporal_window, batch_size, temporal_stride=temporal_stride, **test_init_arrays, **dataset_kwargs)
             return train_dset, test_dset, case_id_map
         else:
             train_init_arrays = _pick_init_arrays(*extracted_values[:5],
                                                 return_normalization_parameters=return_normalization_parameters,
                                                 return_case_names=return_case_names,
                                                 return_case_ids=return_case_ids)
-            train_dset = cls(temporal_window, batch_size, **train_init_arrays, **dataset_kwargs)
+            train_dset = cls(temporal_window, batch_size, temporal_stride=temporal_stride, **train_init_arrays, **dataset_kwargs)
             return train_dset, case_id_map
 
     def __getitem__(self, idx):
         batch_start, batch_end = self._indices_per_batch[idx]
         sample_indices = self._case_temporal_indices[batch_start:batch_end]
         
-        sample_indices = [[x[0],np.array(list(range(x[1][0],x[1][1])), dtype=np.int64)] for x in sample_indices]
+        sample_indices = [[x[0],np.array(list(range(x[1][0],x[1][1],self.temporal_stride)), dtype=np.int64)] for x in sample_indices]
         return_tensors = [[] for _ in range(len(self._return_order))]
         for sample in sample_indices:
             for rt,tn in zip(return_tensors, self._return_order):
@@ -189,7 +192,7 @@ class SpatiotemporalFRDataset(tf.keras.utils.Sequence):
 
 if __name__ == '__main__':
     
-    trd, ted, _ = SpatiotemporalFRDataset.from_hdf5('/storage/pyfr/big_bezier_dataset/annulus_medium_64x256.h5', [1,0,1,0,1], batch_size = 10, train_test_split=0.8, random_split=True, reshape_to_grid=True, retain_variable_dimension=True, normalization = 'full_field_mean_center', return_normalization_parameters=True)
+    trd, ted, _ = SpatiotemporalFRDataset.from_hdf5('/storage/pyfr/big_bezier_dataset/annulus_medium_64x256.h5', [1,0,1,0,1], batch_size = 10, train_test_split=0.8, random_split=True, reshape_to_grid=True, retain_variable_dimension=True, normalization = 'full_field_mean_center', return_normalization_parameters=True, temporal_stride=3)
     trd.shuffle()
     _ = trd[0]
 
