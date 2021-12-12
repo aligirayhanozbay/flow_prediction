@@ -113,10 +113,6 @@ class SpatiotemporalFRDataset(tf.keras.utils.Sequence):
         tstarts = np.arange(self.n_timesteps-1-self.temporal_stride*(self.temporal_window_size-1))
         tends = tstarts + self.temporal_stride*(self.temporal_window_size-1) + 1
         t_idxs = tuple(zip(tstarts, tends))
-        #t_idxs = tuple(zip(
-        #    np.arange(self.n_timesteps-self.temporal_window_size+1),
-        #    np.arange(self.temporal_window_size, self.n_timesteps+1)
-        #))
         indices_per_sample = tuple(itertools.product(case_idxs, t_idxs))
         return indices_per_sample
 
