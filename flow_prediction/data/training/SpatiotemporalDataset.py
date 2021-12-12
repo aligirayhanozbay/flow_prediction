@@ -42,6 +42,8 @@ def _pick_init_arrays(array_list, return_normalization_parameters = False, retur
 
 class SpatiotemporalFRDataset(tf.keras.utils.Sequence):
     _train_test_split_method_axes = {'case':0, None:0,'time':1}
+    _numeric_dtypes = [np.float16, np.float32, np.float64, np.int16, np.int32, np.int64]
+    _float_dtypes = [np.float16, np.float32, np.float64]
     def __init__(self, temporal_window, batch_size, sensor_values, full_field_values, normalization_params = None, case_names = None, case_ids = None):
         super().__init__()
 
@@ -53,7 +55,7 @@ class SpatiotemporalFRDataset(tf.keras.utils.Sequence):
             self.temporal_window = np.array([1.0 for _ in range(temporal_window)])
         else:
             self.temporal_window = np.array(temporal_window)
-        assert self.temporal_window.dtype in [np.float16, np.float32, np.float64, np.int16, np.int32, np.int64]
+        assert self.temporal_window.dtype in self._numeric_dtypes
         assert len(self.temporal_window.shape) == 1
         
             
@@ -125,7 +127,7 @@ class SpatiotemporalFRDataset(tf.keras.utils.Sequence):
         self._case_temporal_indices = tuple(self._case_temporal_indices)
         
     @classmethod
-    def from_hdf5(cls, h5path, temporal_window, batch_size=1, train_test_split = None, train_test_split_type = None, rand_seed=None, random_split=False, return_normalization_parameters = False, dataset_kwargs = None, **extraction_kwargs):
+    def from_hdf5(cls, h5path, temporal_window, batch_size=1, train_test_split = None, train_test_split_type = None, rand_seed=None, random_split=False, return_normalization_parameters = False, return_case_ids = False, return_case_names = False, dataset_kwargs = None, **extraction_kwargs):
 
         if dataset_kwargs is None:
             dataset_kwargs = {}
@@ -140,13 +142,22 @@ class SpatiotemporalFRDataset(tf.keras.utils.Sequence):
             assert ((1.0-train_test_split) > 0.0)
             split_axis = cls._train_test_split_method_axes[train_test_split_type]
             train_arrays, test_arrays = split_arrays(train_test_split,split_axis,*extracted_values[:5], shuffle=random_split)
-            train_init_arrays = _pick_init_arrays(train_arrays, return_normalization_parameters = return_normalization_parameters)
-            test_init_arrays = _pick_init_arrays(test_arrays, return_normalization_parameters = return_normalization_parameters)
+            train_init_arrays = _pick_init_arrays(train_arrays,
+                                                return_normalization_parameters=return_normalization_parameters,
+                                                return_case_names=return_case_names,
+                                                return_case_ids=return_case_ids)
+            test_init_arrays = _pick_init_arrays(test_arrays,
+                                                return_normalization_parameters=return_normalization_parameters,
+                                                return_case_names=return_case_names,
+                                                return_case_ids=return_case_ids)
             train_dset = cls(temporal_window, batch_size, **train_init_arrays, **dataset_kwargs)
             test_dset = cls(temporal_window, batch_size, **test_init_arrays, **dataset_kwargs)
             return train_dset, test_dset, case_id_map
         else:
-            train_init_arrays = _pick_init_arrays(*extracted_values[:5], return_normalization_parameters = return_normalization_parameters)
+            train_init_arrays = _pick_init_arrays(*extracted_values[:5],
+                                                return_normalization_parameters=return_normalization_parameters,
+                                                return_case_names=return_case_names,
+                                                return_case_ids=return_case_ids)
             train_dset = cls(temporal_window, batch_size, **train_init_arrays, **dataset_kwargs)
             return train_dset, case_id_map
 
@@ -162,7 +173,7 @@ class SpatiotemporalFRDataset(tf.keras.utils.Sequence):
                 if tn == 'sensor_values':
                     tensor = np.einsum('t...,t->t...',tensor,self.temporal_window)
                 rt.append(tensor)
-        return_tensors = [np.stack(x,0).astype(tf.keras.backend.floatx()) for x in return_tensors]
+        return_tensors = [np.stack(x,0).astype(tf.keras.backend.floatx()) if (x[0].dtype in self._float_dtypes) else np.stack(x,0) for x in return_tensors]
             
         #tf.gather_nd version - works VERY slowly
         #sample_indices = np.array([list(zip(itertools.repeat(x[0]),range(x[1][0],x[1][1]))) for x in sample_indices], dtype = np.int64)

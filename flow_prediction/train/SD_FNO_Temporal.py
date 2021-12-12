@@ -29,7 +29,7 @@ output_channels = dummy_output.shape[2]
 grid_shape = [n_timesteps] + list(dummy_output.shape[3:])
 del dummy_input, dummy_output
 
-callbacks = [tf.keras.callbacks.ModelCheckpoint(args.checkpoint_path, save_best_only=True)]
+callbacks = [tf.keras.callbacks.ModelCheckpoint(args.checkpoint_path, save_best_only=True, save_weights_only=True)]
 if 'reduce_lr' in config['training']:
     callbacks.append(tf.keras.callbacks.ReduceLROnPlateau(**config['training']['reduce_lr']))
 if 'early_stopping' in config['training']:
@@ -46,7 +46,6 @@ with distribute_strategy.scope():
         **config['model']
     )
     model.summary()
-    import pdb; pdb.set_trace()
     loss_fn = get_loss(config['training']['loss'])
     optim = tf.keras.optimizers.get(config['training']['optimizer'])
     metrics = config['training'].get('metrics', None)
