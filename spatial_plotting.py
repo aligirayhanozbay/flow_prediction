@@ -158,7 +158,7 @@ def extract_dataset_metadata(dataset_path, full_field_mask = None):
 
     return md
         
-def plot(snapshot_ids, results, dataset_metadata, domain_extents, save_folder = None, prefix = None, colorbar_limits = None, proportional_colobar_limits = True, errorplot_colorbar_limits = None):
+def plot(snapshot_ids, results, dataset_metadata, domain_extents, save_folder = None, prefix = None, colorbar_limits = None, proportional_colobar_limits = True, errorplot_colorbar_limits = None, percentage_error_threshold=np.inf):
     if save_folder is None:
         save_folder = './'
     if prefix is None:
@@ -173,7 +173,7 @@ def plot(snapshot_ids, results, dataset_metadata, domain_extents, save_folder = 
     xmin, xmax, ymin, ymax = domain_extents
         
     file_ext = '.png'
-    cbar_limits = {}
+    stats = {}
     for idx, climit in zip(snapshot_ids, colorbar_limits):
         normp = tf.gather(results['norm_params'][idx], dataset_metadata['target_var_indices'])
         gt = np.reshape(results['ground_truths'][idx],[-1,dataset_metadata['n_gt_vars']]) + normp
@@ -181,7 +181,7 @@ def plot(snapshot_ids, results, dataset_metadata, domain_extents, save_folder = 
 
         vmax = climit*np.max(np.abs(gt)) if proportional_colobar_limits else climit
         vmin = -vmax
-        cbar_limits[idx] = [vmin, vmax]
+        stats[idx] = {'cbar_limits': [vmin, vmax], 'metrics':{}}
         x = np.real(dataset_metadata['full_field_locations'][case_name])
         #xmin, xmax = np.min(x), np.max(x)
         y = np.imag(dataset_metadata['full_field_locations'][case_name])
@@ -202,6 +202,7 @@ def plot(snapshot_ids, results, dataset_metadata, domain_extents, save_folder = 
             pred = np.reshape(results['predictions'][identifier][idx],[-1,dataset_metadata['n_gt_vars']]) + normp
             pred = pred.numpy()[spatialmasked_indices]
 
+            stats[idx]['metrics'][identifier] = {}
             for k,(yt,yp) in enumerate(zip(tf.transpose(gt,(1,0)), tf.transpose(pred,(1,0)))):
                 varname = dataset_metadata['variable_names'][dataset_metadata['target_var_indices'][k]]
                 plt.figure()
@@ -226,6 +227,12 @@ def plot(snapshot_ids, results, dataset_metadata, domain_extents, save_folder = 
                 plt.savefig(savepath + file_ext, bbox_inches='tight')
                 plt.close()
 
+                stats[idx]['metrics'][identifier][varname]= {
+                    'mapes': mape_with_threshold(yp, yt, percentage_error_threshold),
+                    'maes': float(tf.reduce_mean(tf.abs(yp - yt)))
+                    }
+                
+
         for k, yt in enumerate(tf.transpose(gt, (1,0))):
             plt.figure()
             plt.tripcolor(x,y,yt,shading='gouraud', cmap='rainbow', vmin = vmin, vmax = vmax)
@@ -239,7 +246,7 @@ def plot(snapshot_ids, results, dataset_metadata, domain_extents, save_folder = 
             plt.savefig(savepath + file_ext, bbox_inches='tight')
             plt.close()
 
-    return cbar_limits
+    return stats
 
 def gather_masked_indices(x, sm, n_gt_vars = 1):
     xshape = tf.shape(x)
@@ -256,6 +263,12 @@ def check_in_polygon(pts, vertices):
     path = mplPath.Path(vertices)
     return path.contains_points(pts)
 
+def mape_with_threshold(yp, yt, threshold=np.inf, eps=1e-7):
+    pct_errors = 100*tf.abs((yp-yt)/(eps + yt))
+    pcterror_filtering_indices = tf.where(pct_errors < threshold)
+    filtered_pcterrors = tf.gather_nd(pct_errors, pcterror_filtering_indices)
+    return float(tf.reduce_mean(filtered_pcterrors))
+    
 def compute_error(results, dataset_metadata, domain_extents, save_folder=None, prefix=None, percentage_error_threshold=np.inf):
     if prefix is None:
         prefix = ''
@@ -297,14 +310,7 @@ def compute_error(results, dataset_metadata, domain_extents, save_folder=None, p
     preds_masked = {k:gather_masked_indices(results['predictions'][k],all_indices, n_gt_vars=dataset_metadata['n_gt_vars']) for k in results['predictions']}
     gts_masked = gather_masked_indices(results['ground_truths'],all_indices, n_gt_vars=dataset_metadata['n_gt_vars'])
     maes = {k:float(tf.reduce_mean(tf.abs(preds_masked[k] - gts_masked))) for k in preds_masked}
-    pct_errors = {k:100*tf.abs((preds_masked[k] - gts_masked)/(1e-7+gts_masked)) for k in preds_masked}
-    for k in pct_errors:
-        #filter out % errors larger than the threshold
-        pcterror_filtering_indices = tf.where(pct_errors[k] < percentage_error_threshold)
-        filtered_pcterrors = tf.gather_nd(pct_errors[k], pcterror_filtering_indices)
-        pct_errors[k] = filtered_pcterrors
-    mapes = {k: float(tf.reduce_mean(pct_errors[k])) for k in pct_errors}
-    # mapes = {k:float(tf.reduce_mean(tf.abs((preds_masked[k] - gts_masked)/gts_masked))) for k in preds_masked}
+    mapes = {k:mape_with_threshold(preds_masked[k], gts_masked, percentage_error_threshold) for k in preds_masked}
     print(f'MAE: {maes}')
     print(f'MAPE: {mapes}')
     
@@ -326,12 +332,23 @@ if __name__ == '__main__':
 
     results = predict(models, train_dataset if args.traindata else test_dataset, [x[0] for x in args.model])
 
-    cbar_limits = plot(args.s, results, dataset_metadata, args.e, args.o, args.prefix, args.c, args.l, args.p)
+    plt_stats = plot(args.s, results, dataset_metadata, args.e, args.o, args.prefix, args.c, args.l, args.p, args.pcterrt)
     error_summary = compute_error(results, dataset_metadata, args.e, args.o, args.prefix, args.pcterrt)
 
     fname = args.o + '/' + '_'.join([args.prefix, 'errormetrics'])+ '.json'
-    error_summary['colorbar_limits'] = cbar_limits
-    json.dump(error_summary, open(fname,'w'))
+    
+
+    for identifier in error_summary:
+        error_summary[identifier]['snapshots'] = {}
+    error_summary['colorbar_limits'] = {}
+    for idx in plt_stats:
+        for identifier in plt_stats[idx]['metrics']:
+            varnames_list = list(plt_stats[idx]['metrics'][identifier].keys())
+            metrics_list = list(plt_stats[idx]['metrics'][identifier][varnames_list[0]].keys())
+            error_summary[identifier]['snapshots'][idx] = {varname:{metric:plt_stats[idx]['metrics'][identifier][varname][metric] for metric in metrics_list} for varname in varnames_list}
+        error_summary['colorbar_limits'][idx] = plt_stats[idx]['cbar_limits']
+    
+    json.dump(error_summary, open(fname,'w'), indent=4)
     
     
 
