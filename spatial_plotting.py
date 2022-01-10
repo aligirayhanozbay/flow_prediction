@@ -22,12 +22,20 @@ def _parse_args():
     parser.add_argument('dataset', type=str, help='path to the dataset file')
     parser.add_argument('-o', type=str, default='./', help='output directory')
     parser.add_argument('-s', nargs='*', type=int, help='indices of snapshots to use', default=[0])
+    parser.add_argument('-c', nargs='*', type=float, help='provide a value for each snapshot, or a single value for all snapshots. clips the colorbars in the plots. e.g. supplying 0.075 for a snapshot means that vmax=-vmin=0.075*max(abs(values in the snapshot)). default is 0.075.', default=[0.075])
+    parser.add_argument('-l', action='store_false', help='interpret colorbar extents as literal values instead of a % of max(abs(values in the snapshot))')
+    parser.add_argument('-p', nargs=2, type=float, help='colobar limits for the % error plot', default=[0,100])
     parser.add_argument('-m','--model',
                         action='append',
                         nargs=4,
                         metavar=('identifier', 'model_type', 'config', 'weights'))
+    parser.add_argument('-e', nargs=4, type=float, help='extents of the plotting domain',
+                        metavar=('xmin', 'xmax', 'ymin', 'ymax'),
+                        default=[-1.5,6.0,-1.5,1.5])
     parser.add_argument('--prefix', type=str, default=None, help='prefix for all output files')
     parser.add_argument('--traindata', action='store_true', help='use training data instead of test data')
+    parser.add_argument('--pcterrt', type=float, help='% errors above this value will be discarded. can be used to filter out extremely high % errors caused due very small denominators.', default=np.inf)
+    
 
     args = parser.parse_args()
 
@@ -150,24 +158,30 @@ def extract_dataset_metadata(dataset_path, full_field_mask = None):
 
     return md
         
-def plot(snapshot_ids, results, dataset_metadata, save_folder = None, prefix = None):
+def plot(snapshot_ids, results, dataset_metadata, domain_extents, save_folder = None, prefix = None, colorbar_limits = None, proportional_colobar_limits = True, errorplot_colorbar_limits = None):
     if save_folder is None:
         save_folder = './'
     if prefix is None:
         prefix = ''
-    
-    xmin = -1.5
-    xmax = 6.0
-    ymin = -1.5
-    ymax = 1.5
+    if colorbar_limits is None:
+        colorbar_limits = [0.075 for _ in snapshot_ids]
+    elif len(colorbar_limits) == 1:
+        colorbar_limits = [colorbar_limits[0] for _ in snapshot_ids]
+    if errorplot_colorbar_limits is None:
+        errorplot_colorbar_limits = [0,100]
+
+    xmin, xmax, ymin, ymax = domain_extents
+        
     file_ext = '.png'
-    for idx in snapshot_ids:
+    cbar_limits = {}
+    for idx, climit in zip(snapshot_ids, colorbar_limits):
         normp = tf.gather(results['norm_params'][idx], dataset_metadata['target_var_indices'])
         gt = np.reshape(results['ground_truths'][idx],[-1,dataset_metadata['n_gt_vars']]) + normp
         case_name = results['case_names'][idx].decode('utf-8')
 
-        vmax = 0.075*np.max(np.abs(gt))
+        vmax = climit*np.max(np.abs(gt)) if proportional_colobar_limits else climit
         vmin = -vmax
+        cbar_limits[idx] = [vmin, vmax]
         x = np.real(dataset_metadata['full_field_locations'][case_name])
         #xmin, xmax = np.min(x), np.max(x)
         y = np.imag(dataset_metadata['full_field_locations'][case_name])
@@ -202,7 +216,7 @@ def plot(snapshot_ids, results, dataset_metadata, save_folder = None, prefix = N
                 plt.close()
 
                 plt.figure()
-                plt.tripcolor(x,y,100*(yp-yt)/(1e-7 + yt),shading='gouraud', cmap='RdBu', vmin = -100, vmax = 100)
+                plt.tripcolor(x,y,100*np.abs((yp-yt)/(1e-7 + yt)),shading='gouraud', cmap='Blues', vmin = 0, vmax = 100)
                 plt.fill(sensor_coords_x[dataset_metadata['n_vsensors']:], sensor_coords_y[dataset_metadata['n_vsensors']:], color='purple')
                 plt.axis('equal')
                 plt.axis('off')
@@ -225,25 +239,99 @@ def plot(snapshot_ids, results, dataset_metadata, save_folder = None, prefix = N
             plt.savefig(savepath + file_ext, bbox_inches='tight')
             plt.close()
 
-            
-            
+    return cbar_limits
+
+def gather_masked_indices(x, sm, n_gt_vars = 1):
+    xshape = tf.shape(x)
+    bsize = xshape[0]
+
+    if tf.rank(x) == 4:
+        x = tf.transpose(x, [0,2,3,1])
+    
+    x = tf.reshape(x,[bsize,-1,n_gt_vars])
+    x = tf.gather_nd(x, sm)
+    return x
+
+def check_in_polygon(pts, vertices):
+    path = mplPath.Path(vertices)
+    return path.contains_points(pts)
+
+def compute_error(results, dataset_metadata, domain_extents, save_folder=None, prefix=None, percentage_error_threshold=np.inf):
+    if prefix is None:
+        prefix = ''
+
+    if save_folder is None:
+        save_folder='./'
+        
+    xmin, xmax, ymin, ymax = domain_extents
+
+    all_indices = []
+    case_names = results['case_names']
+    sensor_locations = dataset_metadata['sensor_locations']
+    full_field_locations = dataset_metadata['full_field_locations']
+    n_vsensors = dataset_metadata['n_vsensors']
+    print('Error calculation...')
+    for k, cname in enumerate(tqdm(case_names)):
+        _cname = cname.decode('utf-8')
+        sensor_coords_x = np.real(sensor_locations[_cname])[n_vsensors:]
+        sensor_coords_y = np.imag(sensor_locations[_cname])[n_vsensors:]
+        sensor_coords = np.stack([sensor_coords_x, sensor_coords_y],-1)
+        x = np.real(full_field_locations[_cname])
+        y = np.imag(full_field_locations[_cname])
+        
+        xmask = np.logical_and(x>xmin, x<xmax)
+        ymask = np.logical_and(y<ymax, y>ymin)
+        spatialmask = np.logical_and(xmask, ymask)
+        spatialmask = np.logical_and(spatialmask,
+                np.logical_not(check_in_polygon(np.stack([x,y],-1), sensor_coords)))
+
+        spatialmasked_indices = np.where(spatialmask)[0]
+        indices = np.stack([
+            k*np.ones(spatialmasked_indices.shape[0]).astype(spatialmasked_indices.dtype),
+            spatialmasked_indices,
+            np.zeros(spatialmasked_indices.shape[0]).astype(spatialmasked_indices.dtype)
+        ], -1)
+        all_indices.append(indices)
+
+    all_indices = np.concatenate(all_indices,0)
+    preds_masked = {k:gather_masked_indices(results['predictions'][k],all_indices, n_gt_vars=dataset_metadata['n_gt_vars']) for k in results['predictions']}
+    gts_masked = gather_masked_indices(results['ground_truths'],all_indices, n_gt_vars=dataset_metadata['n_gt_vars'])
+    maes = {k:float(tf.reduce_mean(tf.abs(preds_masked[k] - gts_masked))) for k in preds_masked}
+    pct_errors = {k:100*tf.abs((preds_masked[k] - gts_masked)/(1e-7+gts_masked)) for k in preds_masked}
+    for k in pct_errors:
+        #filter out % errors larger than the threshold
+        pcterror_filtering_indices = tf.where(pct_errors[k] < percentage_error_threshold)
+        filtered_pcterrors = tf.gather_nd(pct_errors[k], pcterror_filtering_indices)
+        pct_errors[k] = filtered_pcterrors
+    mapes = {k: float(tf.reduce_mean(pct_errors[k])) for k in pct_errors}
+    # mapes = {k:float(tf.reduce_mean(tf.abs((preds_masked[k] - gts_masked)/gts_masked))) for k in preds_masked}
+    print(f'MAE: {maes}')
+    print(f'MAPE: {mapes}')
+    
+    summary = {k:{'mae':maes[k], 'mape':mapes[k]} for k in maes}
+    return summary
 
 if __name__ == '__main__':
     mpl.rcParams['figure.dpi'] = 900
     tf.keras.backend.set_image_data_format('channels_first')
     args = _parse_args()
-
+    
     train_dataset, test_dataset = _init_dataset(args.dataset, args.model[0][2])
 
     ffm = json.load(open(args.model[0][2],'r'))['dataset'].get('full_field_mask',None)
     dataset_metadata = extract_dataset_metadata(args.dataset,ffm)
-
+    
     output_shape = (None,dataset_metadata['n_gt_vars'], *dataset_metadata['grid_shape'])
     models = _init_models(args.model, test_dataset.element_spec[0].shape, output_shape)
 
     results = predict(models, train_dataset if args.traindata else test_dataset, [x[0] for x in args.model])
 
-    plot(args.s, results, dataset_metadata, args.o, args.prefix)
+    cbar_limits = plot(args.s, results, dataset_metadata, args.e, args.o, args.prefix, args.c, args.l, args.p)
+    error_summary = compute_error(results, dataset_metadata, args.e, args.o, args.prefix, args.pcterrt)
+
+    fname = args.o + '/' + '_'.join([args.prefix, 'errormetrics'])+ '.json'
+    error_summary['colorbar_limits'] = cbar_limits
+    json.dump(error_summary, open(fname,'w'))
     
     
 
