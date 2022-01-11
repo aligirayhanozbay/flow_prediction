@@ -35,18 +35,20 @@ def _parse_args():
     parser.add_argument('--prefix', type=str, default=None, help='prefix for all output files')
     parser.add_argument('--traindata', action='store_true', help='use training data instead of test data')
     parser.add_argument('--pcterrt', type=float, help='% errors above this value will be discarded. can be used to filter out extremely high % errors caused due very small denominators.', default=np.inf)
-    
+    parser.add_argument('--bsize', type=int, help='override the batch size used by the dataset', default=None)
 
     args = parser.parse_args()
 
     return args
 
-def _init_dataset(path, config):
+def _init_dataset(path, config, bsize=None):
     if isinstance(config, str):
         dset_config = json.load(open(config, 'r'))['dataset']
     else:
         dset_config = copy.deepcopy(config)
 
+    if bsize is not None:
+        dset_config['batch_size'] = bsize
     
     _ = dset_config.pop('return_normalization_parameters', None)
     _ = dset_config.pop('return_case_names', None)
@@ -322,7 +324,7 @@ if __name__ == '__main__':
     tf.keras.backend.set_image_data_format('channels_first')
     args = _parse_args()
     
-    train_dataset, test_dataset = _init_dataset(args.dataset, args.model[0][2])
+    train_dataset, test_dataset = _init_dataset(args.dataset, args.model[0][2], args.bsize)
 
     ffm = json.load(open(args.model[0][2],'r'))['dataset'].get('full_field_mask',None)
     dataset_metadata = extract_dataset_metadata(args.dataset,ffm)
