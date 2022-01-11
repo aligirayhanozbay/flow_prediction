@@ -15,7 +15,7 @@ from flow_prediction.models.ShallowDecoder import original_shallow_decoder
 from flow_prediction.models.SD_FNO import SD_FNO
 from flow_prediction.data.training.ShallowDecoderDataset import ShallowDecoderDataset, _extract_variable_names, _get_unique_variable_mask_ids
 
-def _parse_args():
+def _parse_args_spatial():
 
     parser=argparse.ArgumentParser('Generate plots for the spatial-only case')
     
@@ -309,8 +309,22 @@ def compute_error(results, dataset_metadata, domain_extents, save_folder=None, p
         all_indices.append(indices)
 
     all_indices = np.concatenate(all_indices,0)
-    preds_masked = {k:gather_masked_indices(results['predictions'][k],all_indices, n_gt_vars=dataset_metadata['n_gt_vars']) for k in results['predictions']}
-    gts_masked = gather_masked_indices(results['ground_truths'],all_indices, n_gt_vars=dataset_metadata['n_gt_vars'])
+    
+    normp = results['norm_params'][:,dataset_metadata['target_var_indices']]
+    reshape_normp = lambda n, p: np.reshape(n, list(n.shape) + [1 for _ in range(len(p.shape) - len(n.shape))])
+    
+    preds_masked = {}
+    for k in results['predictions']:
+        pred = results['predictions'][k]
+        reshaped_normp = reshape_normp(normp, pred)
+        masked_pred = gather_masked_indices(pred + reshaped_normp, all_indices, n_gt_vars=dataset_metadata['n_gt_vars'])
+        preds_masked[k] = masked_pred
+    gts_masked = gather_masked_indices(
+        results['ground_truths'] + reshape_normp(normp, results['ground_truths']),
+        all_indices,
+        n_gt_vars=dataset_metadata['n_gt_vars']
+    )
+    
     maes = {k:float(tf.reduce_mean(tf.abs(preds_masked[k] - gts_masked))) for k in preds_masked}
     mapes = {k:mape_with_threshold(preds_masked[k], gts_masked, percentage_error_threshold) for k in preds_masked}
     print(f'MAE: {maes}')
@@ -322,7 +336,7 @@ def compute_error(results, dataset_metadata, domain_extents, save_folder=None, p
 if __name__ == '__main__':
     mpl.rcParams['figure.dpi'] = 900
     tf.keras.backend.set_image_data_format('channels_first')
-    args = _parse_args()
+    args = _parse_args_spatial()
     
     train_dataset, test_dataset = _init_dataset(args.dataset, args.model[0][2], args.bsize)
 
