@@ -236,6 +236,7 @@ def plot(snapshot_ids, results, dataset_metadata, domain_extents, save_folder = 
                 
 
         for k, yt in enumerate(tf.transpose(gt, (1,0))):
+            varname = dataset_metadata['variable_names'][dataset_metadata['target_var_indices'][k]]
             plt.figure()
             plt.tripcolor(x,y,yt,shading='gouraud', cmap='rainbow', vmin = vmin, vmax = vmax)
             plt.fill(sensor_coords_x[dataset_metadata['n_vsensors']:], sensor_coords_y[dataset_metadata['n_vsensors']:], color='purple')
