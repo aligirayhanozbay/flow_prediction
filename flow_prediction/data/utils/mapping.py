@@ -1,5 +1,5 @@
 import numpy as np
-import pydsc
+import pydscpack
 import itertools
 import concurrent.futures
 import os
@@ -38,5 +38,5 @@ def get_vertices(paths):
     return vertices
 
 def get_maps(vertices):
-    amap = pydsc.AnnulusMap(*vertices, nptq = 64)
+    amap = pydscpack.AnnulusMap(*vertices, nptq = 64)
     return amap

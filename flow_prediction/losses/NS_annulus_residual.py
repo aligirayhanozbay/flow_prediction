@@ -1,5 +1,5 @@
 import numpy as np
-import pydsc
+import pydscpack
 import tensorflow as tf
 
 class NS_annulus_residual:
@@ -25,7 +25,7 @@ class NS_annulus_residual:
         self.rho = rho
 
         if isinstance(annulusmap, dict):
-            self.annulusmap = pydsc.AnnulusMap(mapping_params=annulusmap)
+            self.annulusmap = pydscpack.AnnulusMap(mapping_params=annulusmap)
         else:
             self.annulusmap = annulusmap
 
