@@ -11,7 +11,7 @@ def _extract_variable_names(h5file,nvars=None):
         nvars = h5file[list(h5file.keys())[0]]['sensor_values'].shape[-1]
         
     if nvars == len(variable_ids):
-        return [h5file.attrs[varid].decode('utf-8') for varid in variable_ids]
+        return [h5file.attrs[varid] for varid in variable_ids]
     else:
         warnings.warn('Dataset file has fewer tags for variable names than there are field variables.')
         return None

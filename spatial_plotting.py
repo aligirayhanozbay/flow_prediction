@@ -174,7 +174,7 @@ def plot(snapshot_ids, results, dataset_metadata, domain_extents, save_folder = 
 
     xmin, xmax, ymin, ymax = domain_extents
         
-    file_ext = '.png'
+    file_ext = '.pdf'
     stats = {}
     for idx, climit in zip(snapshot_ids, colorbar_limits):
         normp = tf.gather(results['norm_params'][idx], dataset_metadata['target_var_indices'])

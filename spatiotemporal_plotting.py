@@ -236,7 +236,7 @@ def plot(snapshot_ids, results, dataset_metadata, domain_extents, save_folder = 
 
     maefn = lambda yt, yp: float(tf.reduce_mean(tf.abs(yp - yt)))
         
-    file_ext = '.png'
+    file_ext = '.pdf'
     stats = {}
     for idx, climit in zip(snapshot_ids, colorbar_limits):
         normp_inp = tf.gather(results['norm_params_inp'][idx], dataset_metadata['target_var_indices']).numpy()
@@ -414,22 +414,27 @@ def compute_error(results, dataset_metadata, domain_extents, save_folder=None, p
         all_indices,
         n_gt_vars=dataset_metadata['n_gt_vars']
     )
-    
-    maes_preds_gt_targets = {k:float(tf.reduce_mean(tf.abs(preds_gt_masked[k] - targets_masked))) for k in preds_gt_masked}
+
+    maefn = lambda yt, yp: float(tf.reduce_mean(tf.abs(yp - yt)))
+    maes_preds_gt_targets = {k:maefn(preds_gt_masked[k], targets_masked) for k in preds_gt_masked}
     mapes_preds_gt_targets = {k:mape_with_threshold(preds_gt_masked[k], targets_masked, percentage_error_threshold) for k in preds_gt_masked}
-    maes_preds_rc_targets = {k:float(tf.reduce_mean(tf.abs(preds_rc_masked[k] - targets_masked))) for k in preds_rc_masked}
+    maes_preds_rc_targets = {k:maefn(preds_rc_masked[k],targets_masked) for k in preds_rc_masked}
     mapes_preds_rc_targets = {k:mape_with_threshold(preds_rc_masked[k], targets_masked, percentage_error_threshold) for k in preds_rc_masked}
+    maes_inpgt_inprc = maefn(inputs_gt_masked, inputs_rc_masked)
+    mapes_inpgt_inprc = mape_with_threshold(inputs_rc_masked, inputs_gt_masked)
     print(f'MAE preds_gt - targets: {maes_preds_gt_targets}')
     print(f'MAE preds_rc - targets: {maes_preds_rc_targets}')
     print(f'MAPE preds_gt - targets: {mapes_preds_gt_targets}')
     print(f'MAPE preds_rc - targets: {mapes_preds_rc_targets}')
     
     summary = {k:{
-        'mae_predgt_target':maes_preds_gt_targets[k],
-        'mape_predgt_target':mapes_preds_gt_targets[k],
-        'mae_predrc_target':maes_preds_rc_targets[k],
-        'mape_predrc_target':mapes_preds_rc_targets[k]
+        'mae-predgt-target':maes_preds_gt_targets[k],
+        'mape-predgt-target':mapes_preds_gt_targets[k],
+        'mae-predrc-target':maes_preds_rc_targets[k],
+        'mape-predrc-target':mapes_preds_rc_targets[k]
     } for k in maes_preds_gt_targets}
+    summary['mae-inpgt-inprc'] = maes_inpgt_inprc
+    summary['mape-inpgt-inprc'] = mape_inpgt_inprc
     return summary
 
 if __name__ == '__main__':
@@ -459,9 +464,10 @@ if __name__ == '__main__':
     for idx in plt_stats:
         snapshot_global_metrics = {}
         excl_list = ['metrics', 'cbar_limits']
+        error_summary['snapshot_global_metrics'][idx] = {}
         for k in plt_stats[idx]:
             if (not (k in excl_list)):
-                error_summary['snapshot_global_metrics'][k] = plt_stats[idx][k]
+                error_summary['snapshot_global_metrics'][idx][k] = plt_stats[idx][k]
         for identifier in plt_stats[idx]['metrics']:
             varnames_list = list(plt_stats[idx]['metrics'][identifier].keys())
             metrics_list = list(plt_stats[idx]['metrics'][identifier][varnames_list[0]].keys())

@@ -1,5 +1,5 @@
 import numpy as np
-from tensorflow.python.keras.engine.keras_tensor import KerasTensor
+#from tensorflow.python.keras.engine.keras_tensor import KerasTensor
 import tensorflow as tf
 
 from .ShallowDecoder import _get_original_shallow_decoder_layers
@@ -7,7 +7,8 @@ from .UNet import UNet
 from .PILossModel import undo_mean_center
 
 def convert_to_keras_tensors(layers_list):
-    assert isinstance(layers_list[0], KerasTensor)
+    #import pdb; pdb.set_trace()
+    #assert isinstance(layers_list[0], KerasTensor)
     keras_tensors = [layers_list[0]]
     for layer in layers_list[1:]:
         keras_tensors.append(layer(keras_tensors[-1]))
