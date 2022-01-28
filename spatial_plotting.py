@@ -34,7 +34,8 @@ def _parse_args_spatial():
                         default=[-1.5,6.0,-1.5,1.5])
     parser.add_argument('--prefix', type=str, default=None, help='prefix for all output files')
     parser.add_argument('--traindata', action='store_true', help='use training data instead of test data')
-    parser.add_argument('--pcterrt', type=float, help='% errors above this value will be discarded. can be used to filter out extremely high % errors caused due very small denominators.', default=np.inf)
+    parser.add_argument('--pcterrt', type=float, help='% errors above this value will be discarded in metrics calculations. can be used to filter out extremely high % errors caused due very small denominators.', default=np.inf)
+    parser.add_argument('--magnitudet', type=float, help='float between 0 and 1. if set to e.g. 0.05, for some field f, if a ground truth data pt has absolute value equal to or smaller than 5% of max(|f|), that point is excluded from error metrics', default=0.0)
     parser.add_argument('--bsize', type=int, help='override the batch size used by the dataset', default=None)
 
     args = parser.parse_args()
@@ -266,13 +267,15 @@ def check_in_polygon(pts, vertices):
     path = mplPath.Path(vertices)
     return path.contains_points(pts)
 
-def mape_with_threshold(yp, yt, threshold=np.inf, eps=1e-7):
+def mape_with_threshold(yp, yt, pcterror_threshold=np.inf, max_magnitude_threshold=0.0, eps=1e-7):
     pct_errors = 100*tf.abs((yp-yt)/(eps + yt))
-    pcterror_filtering_indices = tf.where(pct_errors < threshold)
-    filtered_pcterrors = tf.gather_nd(pct_errors, pcterror_filtering_indices)
+    pcterror_mask = pct_errors < pcterror_threshold
+    max_magnitude_mask = tf.logical_not(tf.abs(yt) < (max_magnitude_threshold*tf.reduce_max(tf.abs(yt))))
+    filtering_indices = tf.where(tf.logical_and(pcterror_mask, max_magnitude_mask))
+    filtered_pcterrors = tf.gather_nd(pct_errors, filtering_indices)
     return float(tf.reduce_mean(filtered_pcterrors))
     
-def compute_error(results, dataset_metadata, domain_extents, save_folder=None, prefix=None, percentage_error_threshold=np.inf):
+def compute_error(results, dataset_metadata, domain_extents, save_folder=None, prefix=None, percentage_error_threshold=np.inf, max_magnitude_threshold=0.0):
     if prefix is None:
         prefix = ''
 
@@ -327,7 +330,7 @@ def compute_error(results, dataset_metadata, domain_extents, save_folder=None, p
     )
     
     maes = {k:float(tf.reduce_mean(tf.abs(preds_masked[k] - gts_masked))) for k in preds_masked}
-    mapes = {k:mape_with_threshold(preds_masked[k], gts_masked, percentage_error_threshold) for k in preds_masked}
+    mapes = {k:mape_with_threshold(preds_masked[k], gts_masked, percentage_error_threshold, max_magnitude_threshold) for k in preds_masked}
     print(f'MAE: {maes}')
     print(f'MAPE: {mapes}')
     
@@ -350,7 +353,7 @@ if __name__ == '__main__':
     results = predict(models, train_dataset if args.traindata else test_dataset, [x[0] for x in args.model])
 
     plt_stats = plot(args.s, results, dataset_metadata, args.e, args.o, args.prefix, args.c, args.l, args.p, args.pcterrt)
-    error_summary = compute_error(results, dataset_metadata, args.e, args.o, args.prefix, args.pcterrt)
+    error_summary = compute_error(results, dataset_metadata, args.e, args.o, args.prefix, args.pcterrt, args.magnitudet)
 
     fname = args.o + '/' + '_'.join([args.prefix, 'errormetrics'])+ '.json'
     

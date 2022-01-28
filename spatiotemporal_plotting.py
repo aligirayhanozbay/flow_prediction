@@ -44,6 +44,7 @@ def _parse_args_spatiotemporal():
     parser.add_argument('--prefix', type=str, default=None, help='prefix for all output files')
     parser.add_argument('--traindata', action='store_true', help='use training data instead of test data')
     parser.add_argument('--pcterrt', type=float, help='% errors above this value will be discarded. can be used to filter out extremely high % errors caused due very small denominators.', default=np.inf)
+    parser.add_argument('--magnitudet', type=float, help='float between 0 and 1. if set to e.g. 0.05, for some field f, if a ground truth data pt has absolute value equal to or smaller than 5% of max(|f|), that point is excluded from error metrics', default=0.0)
     parser.add_argument('--bsize', type=int, help='override the batch size used by the dataset', default=None)
 
     args = parser.parse_args()
@@ -337,7 +338,7 @@ def plot(snapshot_ids, results, dataset_metadata, domain_extents, save_folder = 
 
     return stats
     
-def compute_error(results, dataset_metadata, domain_extents, save_folder=None, prefix=None, percentage_error_threshold=np.inf):
+def compute_error(results, dataset_metadata, domain_extents, save_folder=None, prefix=None, percentage_error_threshold=np.inf, max_magnitude_threshold=0.0):
     if prefix is None:
         prefix = ''
 
@@ -417,9 +418,9 @@ def compute_error(results, dataset_metadata, domain_extents, save_folder=None, p
 
     maefn = lambda yt, yp: float(tf.reduce_mean(tf.abs(yp - yt)))
     maes_preds_gt_targets = {k:maefn(preds_gt_masked[k], targets_masked) for k in preds_gt_masked}
-    mapes_preds_gt_targets = {k:mape_with_threshold(preds_gt_masked[k], targets_masked, percentage_error_threshold) for k in preds_gt_masked}
+    mapes_preds_gt_targets = {k:mape_with_threshold(preds_gt_masked[k], targets_masked, percentage_error_threshold, max_magnitude_threshold) for k in preds_gt_masked}
     maes_preds_rc_targets = {k:maefn(preds_rc_masked[k],targets_masked) for k in preds_rc_masked}
-    mapes_preds_rc_targets = {k:mape_with_threshold(preds_rc_masked[k], targets_masked, percentage_error_threshold) for k in preds_rc_masked}
+    mapes_preds_rc_targets = {k:mape_with_threshold(preds_rc_masked[k], targets_masked, percentage_error_threshold, max_magnitude_threshold) for k in preds_rc_masked}
     maes_inpgt_inprc = maefn(inputs_gt_masked, inputs_rc_masked)
     mapes_inpgt_inprc = mape_with_threshold(inputs_rc_masked, inputs_gt_masked)
     print(f'MAE preds_gt - targets: {maes_preds_gt_targets}')
@@ -454,7 +455,7 @@ if __name__ == '__main__':
     
     plt_stats = plot(args.s, results, dataset_metadata, args.e, args.o, args.prefix, args.c, args.l, args.p, args.pcterrt)
     
-    error_summary = compute_error(results, dataset_metadata, args.e, args.o, args.prefix, args.pcterrt)
+    error_summary = compute_error(results, dataset_metadata, args.e, args.o, args.prefix, args.pcterrt, args.magnitudet)
     
     fname = args.o + '/' + '_'.join([args.prefix, 'errormetrics'])+ '.json'
     for identifier in error_summary:
