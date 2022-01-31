@@ -161,7 +161,7 @@ def extract_dataset_metadata(dataset_path, full_field_mask = None):
 
     return md
         
-def plot(snapshot_ids, results, dataset_metadata, domain_extents, save_folder = None, prefix = None, colorbar_limits = None, proportional_colobar_limits = True, errorplot_colorbar_limits = None, percentage_error_threshold=np.inf):
+def plot(snapshot_ids, results, dataset_metadata, domain_extents, save_folder = None, prefix = None, colorbar_limits = None, proportional_colobar_limits = True, errorplot_colorbar_limits = None, percentage_error_threshold=np.inf, max_magnitude_threshold=0.0):
     if save_folder is None:
         save_folder = './'
     if prefix is None:
@@ -231,7 +231,7 @@ def plot(snapshot_ids, results, dataset_metadata, domain_extents, save_folder = 
                 plt.close()
 
                 stats[idx]['metrics'][identifier][varname]= {
-                    'mapes': mape_with_threshold(yp, yt, percentage_error_threshold),
+                    'mapes': mape_with_threshold(yp, yt, percentage_error_threshold, max_magnitude_threshold),
                     'maes': float(tf.reduce_mean(tf.abs(yp - yt)))
                     }
                 
@@ -352,7 +352,7 @@ if __name__ == '__main__':
 
     results = predict(models, train_dataset if args.traindata else test_dataset, [x[0] for x in args.model])
 
-    plt_stats = plot(args.s, results, dataset_metadata, args.e, args.o, args.prefix, args.c, args.l, args.p, args.pcterrt)
+    plt_stats = plot(args.s, results, dataset_metadata, args.e, args.o, args.prefix, args.c, args.l, args.p, args.pcterrt, args.magnitudet)
     error_summary = compute_error(results, dataset_metadata, args.e, args.o, args.prefix, args.pcterrt, args.magnitudet)
 
     fname = args.o + '/' + '_'.join([args.prefix, 'errormetrics'])+ '.json'
