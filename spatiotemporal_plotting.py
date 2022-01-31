@@ -435,7 +435,7 @@ def compute_error(results, dataset_metadata, domain_extents, save_folder=None, p
         'mape-predrc-target':mapes_preds_rc_targets[k]
     } for k in maes_preds_gt_targets}
     summary['mae-inpgt-inprc'] = maes_inpgt_inprc
-    summary['mape-inpgt-inprc'] = mape_inpgt_inprc
+    summary['mape-inpgt-inprc'] = mapes_inpgt_inprc
     return summary
 
 if __name__ == '__main__':
@@ -458,7 +458,7 @@ if __name__ == '__main__':
     error_summary = compute_error(results, dataset_metadata, args.e, args.o, args.prefix, args.pcterrt, args.magnitudet)
     
     fname = args.o + '/' + '_'.join([args.prefix, 'errormetrics'])+ '.json'
-    for identifier in error_summary:
+    for identifier in [x[0] for x in args.model]:
         error_summary[identifier]['snapshots'] = {}
     error_summary['colorbar_limits'] = {}
     error_summary['snapshot_global_metrics'] = {}
