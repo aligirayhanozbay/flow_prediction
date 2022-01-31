@@ -221,7 +221,7 @@ def _plot_field(x,y,f,cmap,crange,obj_vertices,extents,fname):
     plt.close()
     return
         
-def plot(snapshot_ids, results, dataset_metadata, domain_extents, save_folder = None, prefix = None, colorbar_limits = None, proportional_colobar_limits = True, errorplot_colorbar_limits = None, percentage_error_threshold=np.inf):
+def plot(snapshot_ids, results, dataset_metadata, domain_extents, save_folder = None, prefix = None, colorbar_limits = None, proportional_colobar_limits = True, errorplot_colorbar_limits = None, percentage_error_threshold=np.inf, max_magnitude_threshold=0.0):
     if save_folder is None:
         save_folder = './'
     if prefix is None:
@@ -302,8 +302,8 @@ def plot(snapshot_ids, results, dataset_metadata, domain_extents, save_folder = 
                     _plot_field(x,y,tensor,cmap,crange,obj_vertices, domain_extents, savepath + file_ext)
                     
                 stats[idx]['metrics'][identifier][varname] = {
-                    'mape-predgt-target': mape_with_threshold(tensors[0], target[:,k], percentage_error_threshold),
-                    'mape-predrc-target': mape_with_threshold(tensors[1], target[:,k], percentage_error_threshold),
+                    'mape-predgt-target': mape_with_threshold(tensors[0], target[:,k], percentage_error_threshold, max_magnitude_threshold),
+                    'mape-predrc-target': mape_with_threshold(tensors[1], target[:,k], percentage_error_threshold, max_magnitude_threshold),
                     'mae-predgt-target': maefn(tensors[0], target[:,k]),
                     'mae-predrc-target': maefn(tensors[1], target[:,k])
                 }
@@ -453,7 +453,7 @@ if __name__ == '__main__':
 
     results = predict(models, train_dataset if args.traindata else test_dataset, [x[0] for x in args.model])
     
-    plt_stats = plot(args.s, results, dataset_metadata, args.e, args.o, args.prefix, args.c, args.l, args.p, args.pcterrt)
+    plt_stats = plot(args.s, results, dataset_metadata, args.e, args.o, args.prefix, args.c, args.l, args.p, args.pcterrt, args.magnitudet)
     
     error_summary = compute_error(results, dataset_metadata, args.e, args.o, args.prefix, args.pcterrt, args.magnitudet)
     
