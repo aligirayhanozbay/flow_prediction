@@ -3,11 +3,14 @@ import json
 import tensorflow as tf
 import h5py
 import itertools
+import re
 
 tf.keras.backend.set_image_data_format('channels_first')
 
 from ..models.FNO import FNO
 from ..models.SD_UNet import SD_UNet
+from ..models.SD_FNO import SD_FNO
+from ..models.ShallowDecoder import original_shallow_decoder
 from ..data.training.TimeMarchingDataset import TimeMarchingDataset
 from ..losses import get as get_loss
 
@@ -36,9 +39,21 @@ if (not ('dataset_kwargs' in config['dataset'])):
 config['dataset']['dataset_kwargs']['return_sensor_values']=False
     
 if args.reconstruction_model_weights is not None and ('reconstruction_model' in config):
-    rcm = SD_UNet(input_units, grid_shape, out_channels = output_channels, **config['reconstruction_model'])
-    rcm.load_weights(args.reconstruction_model_weights)
-    print('Successfully loaded ' + args.reconstruction_model_weights)
+    model_type = config.get('reconstruction_model_type', 'SD-UNet')
+    if model_type == 'SD-UNet':
+        rcm = SD_UNet(input_units, grid_shape, out_channels = output_channels, **config['reconstruction_model'])
+        rcm.load_weights(args.reconstruction_model_weights)
+        print('Successfully loaded ' + args.reconstruction_model_weights)
+    elif model_type == 'SD-FNO':
+        rcm = SD_FNO(input_units, grid_shape, out_channels = output_channels, **config['reconstruction_model'])
+        rcm.load_weights(args.reconstruction_model_weights)
+        print('Successfully loaded ' + args.reconstruction_model_weights)
+    elif model_type == 'SD':
+        output_units = int(tf.reduce_prod(tf.concat([[output_channels],grid_shape],0)))
+        rcm = original_shallow_decoder(input_units, output_units, **config['reconstruction_model'])
+        rcm.load_weights(args.reconstruction_model_weights)
+        print('Successfully loaded ' + args.reconstruction_model_weights)
+        rcm = tf.keras.Sequential([tf.keras.layers.Input(input_units), rcm, tf.keras.layers.Reshape((output_channels, *grid_shape))])
     config['dataset']['dataset_kwargs']['reconstruction_model'] = rcm
 
 train_dataset, test_dataset, _ = TimeMarchingDataset.from_hdf5(

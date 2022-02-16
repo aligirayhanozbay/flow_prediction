@@ -103,7 +103,7 @@ def predict(models,dataset,identifiers=None):
 
     print('Running eval...')
     if identifiers is None:
-        identifier = list(range(len(models)))
+        identifiers = list(range(len(models)))
 
     n_batches = int(dataset.cardinality())
 
@@ -113,7 +113,7 @@ def predict(models,dataset,identifiers=None):
     ground_truths = []
     pbar = tqdm(total = n_batches)
     pbar.set_description('Copying')
-    for x,y,n,c in iter(test_dataset):
+    for x,y,n,c in iter(dataset):
         inputs.append(x.numpy())
         norm_params.append(n.numpy())
         case_names.append(c.numpy())
@@ -132,7 +132,7 @@ def predict(models,dataset,identifiers=None):
         pbar = tqdm(total = n_batches)
         pbar.set_description(str(identifier))
         preds = []
-        for x,_,_,_ in iter(test_dataset):
+        for x,_,_,_ in iter(dataset):
             preds.append(model(x).numpy())
             pbar.update(1)
             
