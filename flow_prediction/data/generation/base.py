@@ -97,7 +97,7 @@ class BasePyFRDatahandler:
 
             self.device_placement_map = device_placement_map
             self._device_placement_wraparound = solvers_per_round_cumsum[-1]
-        elif self.backend == 'openmp' or (isinstance(auto_device_placement, bool) and (not auto_device_placement)):
+        elif backend == 'openmp' or (isinstance(auto_device_placement, bool) and (not auto_device_placement)):
             self.device_placement_map = None
         else:
             raise(ValueError('Error parsing device placement map for auto device placement. auto_device_placement must be a bool, List[int] or Dict[int,float]. You supplied: ' + str(auto_device_placement)))
