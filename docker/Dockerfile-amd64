@@ -1,0 +1,11 @@
+FROM tensorflow/tensorflow:2.7.0-gpu-jupyter
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt update
+RUN apt install --no-install-recommends -y gfortran git python3-gmsh python3-setuptools python3-pip libopenmpi-dev libmetis-dev python3-scipy cuda-nvrtc-dev-11-2 libcublas-dev-11-2
+
+RUN pip3 install pygmsh tqdm pyfr==1.12.3 h5py
+
+RUN cd / && git clone https://github.com/aligirayhanozbay/pydscpack/ && cd /pydscpack && pip3 install -e .
+RUN cd / && git clone --recursive https://github.com/aligirayhanozbay/flow_prediction
