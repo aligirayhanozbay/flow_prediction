@@ -32,6 +32,7 @@ def _parse_args_spatial():
     parser.add_argument('-e', nargs=4, type=float, help='extents of the plotting domain',
                         metavar=('xmin', 'xmax', 'ymin', 'ymax'),
                         default=[-1.5,6.0,-1.5,1.5])
+    parser.add_argument('--cmap', default='rainbow', type=str, help='color map to use. default is rainbow. see matplotlib documentation.')
     parser.add_argument('--prefix', type=str, default=None, help='prefix for all output files')
     parser.add_argument('--traindata', action='store_true', help='use training data instead of test data')
     parser.add_argument('--pcterrt', type=float, help='% errors above this value will be discarded in metrics calculations. can be used to filter out extremely high % errors caused due very small denominators.', default=np.inf)
@@ -161,7 +162,7 @@ def extract_dataset_metadata(dataset_path, full_field_mask = None):
 
     return md
         
-def plot(snapshot_ids, results, dataset_metadata, domain_extents, save_folder = None, prefix = None, colorbar_limits = None, proportional_colobar_limits = True, errorplot_colorbar_limits = None, percentage_error_threshold=np.inf, max_magnitude_threshold=0.0):
+def plot(snapshot_ids, results, dataset_metadata, domain_extents, save_folder = None, prefix = None, colorbar_limits = None, proportional_colobar_limits = True, errorplot_colorbar_limits = None, percentage_error_threshold=np.inf, max_magnitude_threshold=0.0, cmap = None):
     if save_folder is None:
         save_folder = './'
     if prefix is None:
@@ -173,6 +174,7 @@ def plot(snapshot_ids, results, dataset_metadata, domain_extents, save_folder = 
     if errorplot_colorbar_limits is None:
         errorplot_colorbar_limits = [0,100]
 
+    cmap = cmap or 'rainbow'
     xmin, xmax, ymin, ymax = domain_extents
         
     file_ext = '.pdf'
@@ -209,7 +211,7 @@ def plot(snapshot_ids, results, dataset_metadata, domain_extents, save_folder = 
             for k,(yt,yp) in enumerate(zip(tf.transpose(gt,(1,0)), tf.transpose(pred,(1,0)))):
                 varname = dataset_metadata['variable_names'][dataset_metadata['target_var_indices'][k]]
                 plt.figure()
-                plt.tripcolor(x,y,yp,shading='gouraud', cmap='rainbow', vmin = vmin, vmax = vmax)
+                plt.tripcolor(x,y,yp,shading='gouraud', cmap=cmap, vmin = vmin, vmax = vmax)
                 plt.fill(sensor_coords_x[dataset_metadata['n_vsensors']:], sensor_coords_y[dataset_metadata['n_vsensors']:], color='purple')
                 plt.axis('equal')
                 plt.axis('off')
@@ -239,7 +241,7 @@ def plot(snapshot_ids, results, dataset_metadata, domain_extents, save_folder = 
         for k, yt in enumerate(tf.transpose(gt, (1,0))):
             varname = dataset_metadata['variable_names'][dataset_metadata['target_var_indices'][k]]
             plt.figure()
-            plt.tripcolor(x,y,yt,shading='gouraud', cmap='rainbow', vmin = vmin, vmax = vmax)
+            plt.tripcolor(x,y,yt,shading='gouraud', cmap=cmap, vmin = vmin, vmax = vmax)
             plt.fill(sensor_coords_x[dataset_metadata['n_vsensors']:], sensor_coords_y[dataset_metadata['n_vsensors']:], color='purple')
             plt.axis('equal')
             plt.axis('off')
@@ -252,15 +254,18 @@ def plot(snapshot_ids, results, dataset_metadata, domain_extents, save_folder = 
 
     return stats
 
-def gather_masked_indices(x, sm, n_gt_vars = 1):
+def gather_masked_indices(x, sm, n_gt_vars = 1, norm_params = 0.0):
     xshape = tf.shape(x)
     bsize = xshape[0]
 
+    if isinstance(norm_params, tf.Tensor) or isinstance(norm_params, np.ndarray) and (len(norm_params.shape) != 3):
+        norm_params = tf.reshape(norm_params, [bsize, 1, n_gt_vars])
+    
     if tf.rank(x) == 4:
         x = tf.transpose(x, [0,2,3,1])
     
     x = tf.reshape(x,[bsize,-1,n_gt_vars])
-    x = tf.gather_nd(x, sm)
+    x = tf.gather_nd(x + norm_params, sm)
     return x
 
 def check_in_polygon(pts, vertices):
@@ -323,10 +328,12 @@ def compute_error(results, dataset_metadata, domain_extents, save_folder=None, p
         reshaped_normp = reshape_normp(normp, pred)
         masked_pred = gather_masked_indices(pred + reshaped_normp, all_indices, n_gt_vars=dataset_metadata['n_gt_vars'])
         preds_masked[k] = masked_pred
+    
     gts_masked = gather_masked_indices(
-        results['ground_truths'] + reshape_normp(normp, results['ground_truths']),
+        results['ground_truths'],
         all_indices,
-        n_gt_vars=dataset_metadata['n_gt_vars']
+        n_gt_vars=dataset_metadata['n_gt_vars'],
+        norm_params=reshape_normp(normp, results['ground_truths'])
     )
     
     maes = {k:float(tf.reduce_mean(tf.abs(preds_masked[k] - gts_masked))) for k in preds_masked}
@@ -352,7 +359,7 @@ if __name__ == '__main__':
 
     results = predict(models, train_dataset if args.traindata else test_dataset, [x[0] for x in args.model])
 
-    plt_stats = plot(args.s, results, dataset_metadata, args.e, args.o, args.prefix, args.c, args.l, args.p, args.pcterrt, args.magnitudet)
+    plt_stats = plot(args.s, results, dataset_metadata, args.e, args.o, args.prefix, args.c, args.l, args.p, args.pcterrt, args.magnitudet, cmap = args.cmap)
     error_summary = compute_error(results, dataset_metadata, args.e, args.o, args.prefix, args.pcterrt, args.magnitudet)
 
     fname = args.o + '/' + '_'.join([args.prefix, 'errormetrics'])+ '.json'
