@@ -204,7 +204,11 @@ def plot(snapshot_ids, results, dataset_metadata, domain_extents, save_folder = 
         sensor_coords_y = np.imag(dataset_metadata['sensor_locations'][case_name])
         
         for identifier in results['predictions']:
-            pred = np.reshape(results['predictions'][identifier][idx],[-1,dataset_metadata['n_gt_vars']]) + normp
+            pred = results['predictions'][identifier][idx]
+            if len(pred.shape) > 1:
+                _newaxes = list(range(1,len(pred.shape))) + [0]
+                pred = pred.transpose(_newaxes)
+            pred = np.reshape(pred,[-1,dataset_metadata['n_gt_vars']]) + normp
             pred = pred.numpy()[spatialmasked_indices]
 
             stats[idx]['metrics'][identifier] = {}
