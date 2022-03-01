@@ -316,8 +316,7 @@ def compute_error(results, dataset_metadata, domain_extents, save_folder=None, p
         spatialmasked_indices = np.where(spatialmask)[0]
         indices = np.stack([
             k*np.ones(spatialmasked_indices.shape[0]).astype(spatialmasked_indices.dtype),
-            spatialmasked_indices,
-            np.zeros(spatialmasked_indices.shape[0]).astype(spatialmasked_indices.dtype)
+            spatialmasked_indices
         ], -1)
         all_indices.append(indices)
 
@@ -339,9 +338,19 @@ def compute_error(results, dataset_metadata, domain_extents, save_folder=None, p
         n_gt_vars=dataset_metadata['n_gt_vars'],
         norm_params=reshape_normp(normp, results['ground_truths'])
     )
+
     
-    maes = {k:float(tf.reduce_mean(tf.abs(preds_masked[k] - gts_masked))) for k in preds_masked}
-    mapes = {k:mape_with_threshold(preds_masked[k], gts_masked, percentage_error_threshold, max_magnitude_threshold) for k in preds_masked}
+    maes = {}
+    mapes = {}
+    varnames = [dataset_metadata['variable_names'][vidx] for vidx in dataset_metadata['target_var_indices']]
+    for k in preds_masked:
+        maes[k] = {}
+        mapes[k] = {}
+        for vidx in range(gts_masked.shape[-1]):
+            maes[k][varnames[vidx]] = float(tf.reduce_mean(tf.abs(preds_masked[k][...,vidx] - gts_masked[...,vidx])))
+            mapes[k][varnames[vidx]] = mape_with_threshold(preds_masked[k][...,vidx], gts_masked[...,vidx], percentage_error_threshold, max_magnitude_threshold)
+        
+    
     print(f'MAE: {maes}')
     print(f'MAPE: {mapes}')
     
