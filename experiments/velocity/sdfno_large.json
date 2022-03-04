@@ -1,0 +1,38 @@
+{
+    "model": {
+	"sd_config":{
+		"normalization": "batchnorm",
+		"hidden_layer_units": [512,2048],
+		"hidden_layer_activations": ["leaky_relu", "leaky_relu"],
+		"l2_regularization": 1e-3
+	},
+	"fno_channels": 32,
+	"fno_modes": [16,16],
+	"fno_config": {
+	    "final_activation": "linear"
+	}
+    },
+    "dataset": {
+	"batch_size": 50,
+	"shuffle": true,
+	"sensor_masks": [["u", "v"], ["u", "v"], ["u", "v"], ["u", "v"], ["u", "v"], ["u", "v"], ["u", "v"], ["u", "v"], ["u", "v"], ["u", "v"], ["u", "v"], ["u", "v"], ["u", "v"], ["u", "v"], ["u", "v"], ["u", "v"], ["u", "v"], ["u", "v"], ["u", "v"], ["u", "v"], ["u", "v"], ["u", "v"], ["u", "v"], ["u", "v"], ["u", "v"], ["p"], ["p"], ["p"], ["p"], ["p"], ["p"], ["p"], ["p"], ["p"], ["p"], ["p"], ["p"], ["p"], ["p"], ["p"], ["p"], ["p"], ["p"], ["p"], ["p"], ["p"], ["p"], ["p"], ["p"], ["p"], ["p"], ["p"], ["p"], ["p"], ["p"], ["p"], ["p"], ["p"], ["p"], ["p"], ["p"], ["p"], ["p"], ["p"], ["p"], ["p"], ["p"], ["p"], ["p"], ["p"], ["p"], ["p"], ["p"], ["p"], ["p"]],
+	"full_field_mask": ["u","v"],
+	"normalization": "full_field_mean_center",
+	"train_test_split": 0.8,
+	"train_test_split_by_case": true,
+	"rand_seed": 42
+    },
+    "training": {
+	"epochs": 200,
+	"validation_steps": 10,
+	"early_stopping": {"patience": 15, "verbose": true, "monitor": "loss"},
+	"reduce_lr": {"patience": 7, "verbose": true, "min_lr": 1e-6, "monitor": "loss"},
+	"loss": "mae",
+	"optimizer": {
+		"class_name": "adam",
+		"config": {
+			"learning_rate": 1e-3
+		}
+	}
+    }
+}
