@@ -70,6 +70,9 @@ class PyFRIntegratorHandler:
                         ini.set('soln-plugin-pseudostats', 'file', self.residuals_path)
                         ini.set('soln-plugin-pseudostats', 'nsteps', str(self.residuals_frequency))
                         ini.set('soln-plugin-pseudostats', 'header', 'true')
+                else:
+                        ini.set('soln-plugin-pseudostats', 'file', '/dev/null')
+                        ini.set('soln-plugin-pseudostats', 'nsteps', 99999)
                 
                 self.solver = pyfr_solver_create(mesh, None, ini, self.backend)
 
@@ -97,7 +100,10 @@ class PyFRIntegratorHandler:
                 self.create_solver()
                 while True:
                         msg = self._pipe_child.recv()
-                        result = self.handle_message(msg)
+                        if msg == -1:
+                                return
+                        else:
+                                result = self.handle_message(msg)
                         #self._pipe_child.send(result)
 
         def start(self):
@@ -112,7 +118,7 @@ class PyFRIntegratorHandler:
 
         def stop(self):
                 if self._process is not None:
-                        self._process.terminate()
+                        self._pipe_main.send(-1)
                         self._process.join()
 
         def advance_to(self, t):

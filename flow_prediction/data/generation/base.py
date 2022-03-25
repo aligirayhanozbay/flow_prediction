@@ -8,6 +8,7 @@ import h5py
 import multiprocessing
 import glob
 import warnings
+import copy
 
 from ..utils.PyFRIntegratorHandler import PyFRIntegratorHandler
 from ..geometry.bezier_shapes.shapes_utils import Shape
@@ -39,26 +40,105 @@ class BasePyFRDatahandler:
         }
     }
     device_placement_counter = itertools.count()
-    def __init__(self, mesh_files = None, case_ids = None, pyfr_configs = None, n_bezier = 0, bezier_config = None, bezier_case_prefix = None, load_cached = False, force_remesh = False, keep_directories_clean = True, backend = None, auto_device_placement = False, sample_times = None, residuals_folder = None, residuals_frequency = 20):
+    def __init__(self, mesh_files = None, case_ids = None, pyfr_configs = None, n_bezier = 0, bezier_config = None, bezier_case_prefix = None, load_cached = False, force_remesh = False, keep_directories_clean = True, backend = None, auto_device_placement = False, sample_times = None, residuals_folder = None, residuals_frequency = 20, bezier_mapping_quality_threshold = np.inf):
         '''
         -mesh_files: List[str]. Paths to .geo/.msh/.pyfrm files.
         -case_ids: List[str]. Case ID to assign to each solver in mesh_files. 
         -pyfr_configs: str or List[str]. Path(s) to PyFR .ini file(s).
         -n_bezier: int. Number of randomly generated Bezier geometry cases to generate and run.
         -bezier_config: Dict. Config to generate the Bezier geometries. bezier_config['shape'] are the kwargs for the Shape object, bezier_config['mesh'] are the kwargs for the Shape.mesh method, bezier_config['magnify'] sets a magnification factor for the generated object inside the domain.
-        -bezier_case_prefix: str. Prefix for the case names of Bezier geometries. Example: providing 'foo_' may result in a case with ID 'foo_0831eeb9'
+        -bezier_case_prefix: str. Prefix for the case names of Bezier geometries. Example: providing 'foo_' may result in a case with ID 'foo_0'
         -force_remesh: bool. If False and e.g. a .msh file corresponding to a given .geo file exists in the same directory, this mesh will be used as-is. If True, new .msh/.pyfrm will be overwritten.
         -keep_directories_clean: bool. If True, all new generated .msh/.pyfrm files will be created in /tmp/.
         -backend: str. PyFR backend to use. Defaults to openmp (i.e. CPU).
         -auto_device_placement: bool, int, List[int] or Dict[int,float]. False follows default pyfr behaviour based on the ini. True to automatically place each new created solver on different devices in a round-robin fashion. List of integers to use the specified device IDs round-robin. If a dict, the keys are the device ids to be used and the corresponding float value assigns a weight - e.g. {0:0.25, 1:0.75} with 4 solvers will assign 1 to device 0 and 3 to device 1. Does nothing for openmp backend.
         -sample_times: List of 3 floats. Start, stop and step for snapshots' times.
+        -residuals_folder: str. Folder to put residual information in. No residuals will be written out if left as None.
+        -residuals_frequency: int. # of timesteps per residual output.
+        -bezier_mapping_quality_threshold: float. 
         '''
         backend = 'openmp' if backend is None else backend
         self.force_remesh = force_remesh
         self.keep_directories_clean = keep_directories_clean
         self.residuals_folder = residuals_folder
         self.residuals_frequency = residuals_frequency
+        self.bezier_case_prefix = bezier_case_prefix if bezier_case_prefix is not None else 'shape_'
+        self.bezier_config = self._merge_bezier_opts(bezier_config)
+        self.bezier_mapping_quality_threshold = bezier_mapping_quality_threshold
+
+        self.device_placement_map, self._device_placement_wraparound = self._get_device_placement_map(auto_device_placement, backend)
+
+        self.sample_times = self._get_sample_times(sample_times)#keeps track of the physical times to compute the soln at
         
+        self.integrators = self._get_integrators(mesh_files, pyfr_configs, case_ids, n_bezier, backend)
+
+        self._start_integrators()
+
+        #Preallocate solver cache
+        self._preallocate_caches()
+
+    def _merge_bezier_opts(self, user_opts):
+        if user_opts is None:
+            return self.bezier_default_opts
+        else:
+            merged_opts = {}
+            for field in self.bezier_default_opts:
+                merged_opts[field] = {**(self.bezier_default_opts[field]), **(user_opts.get(field, {}))}
+            return merged_opts
+
+    def _get_integrators(self, mesh_files, pyfr_configs, case_ids, n_bezier, backend):
+        ###################
+        #Create the actual solvers
+        ###################
+        integrators = []
+        #integrators for specified mesh files
+        mesh_files = list(itertools.chain.from_iterable([glob.glob(fname) for fname in mesh_files]))
+        case_ids = self._handle_case_ids(case_ids, mesh_files)
+        if mesh_files is not None and pyfr_configs is not None:
+            integ_ids = [next(self.device_placement_counter) for _ in mesh_files]
+            
+            integs = []
+            for m,c,i,cid in zip(mesh_files, itertools.repeat(pyfr_configs) if isinstance(pyfr_configs, str) else pyfr_configs, integ_ids, case_ids):
+                integs.append(self.create_integrator_handler(m,c,backend,i,cid))
+            integrators = integrators + list(integs)
+        elif (mesh_files is not None) ^ (pyfr_configs is not None):
+            raise(ValueError('Both mesh files and PyFR config files must be supplied'))
+        
+        #integrators for randomly generated Bezier geometry cases
+        if (n_bezier > 0) and (self.bezier_config is not None):
+            cfg_iterator = itertools.repeat(pyfr_configs if isinstance(pyfr_configs,str) else pyfr_configs[0], n_bezier)
+            backend_iterator = itertools.repeat(backend, n_bezier)
+            integ_ids = [next(self.device_placement_counter) for _ in range(n_bezier)]
+
+            integs = []
+            for c,b,i in zip(cfg_iterator, backend_iterator, integ_ids):
+                integs.append(self._create_bezier_integrator(c,b,i))
+            integrators = integrators + list(integs)
+        return integrators
+
+    def _start_integrators(self):
+        ###################
+        #Create solver child processes, without starting the solution process
+        ###################
+        for integ in self.integrators:
+            integ.start()
+
+    @staticmethod
+    def _get_sample_times(sample_times):
+        ###################
+        #Times to save the solution at - for self.generate_data()
+        #For now, only generation of data in advance is supported.
+        ###################
+        if isinstance(sample_times, list) or isinstance(sample_times, tuple):
+            if isinstance(sample_times[2], float):
+                sample_times[2] = round((sample_times[1] - sample_times[0])/sample_times[2])+1
+            sample_times = np.linspace(*sample_times)
+        else:
+            sample_times = np.array(sample_times)
+        return sample_times
+        
+    @staticmethod
+    def _get_device_placement_map(auto_device_placement, backend):
         ###################
         #Auto device placement code
         ###################
@@ -95,71 +175,14 @@ class BasePyFRDatahandler:
                 for modulus in range(min_device_modulus, max_device_modulus):
                     device_placement_map[modulus] = device_id
 
-            self.device_placement_map = device_placement_map
-            self._device_placement_wraparound = solvers_per_round_cumsum[-1]
+            device_placement_map = device_placement_map
+            device_placement_wraparound = solvers_per_round_cumsum[-1]
         elif backend == 'openmp' or (isinstance(auto_device_placement, bool) and (not auto_device_placement)):
-            self.device_placement_map = None
+            device_placement_map = None
+            device_placement_wraparound = None
         else:
             raise(ValueError('Error parsing device placement map for auto device placement. auto_device_placement must be a bool, List[int] or Dict[int,float]. You supplied: ' + str(auto_device_placement)))
-
-        ###################
-        #Create the actual solvers
-        ###################
-        self.integrators = []
-        #integrators for specified mesh files
-        mesh_files = list(itertools.chain.from_iterable([glob.glob(fname) for fname in mesh_files]))
-        case_ids = self._handle_case_ids(case_ids, mesh_files)
-        if mesh_files is not None and pyfr_configs is not None:
-            integ_ids = [next(self.device_placement_counter) for _ in mesh_files]
-
-            integs = []
-            for m,c,i,cid in zip(mesh_files, itertools.repeat(pyfr_configs) if isinstance(pyfr_configs, str) else pyfr_configs, integ_ids, case_ids):
-                integs.append(self.create_integrator_handler(m,c,backend,i,cid))
-            self.integrators = self.integrators + list(integs)
-        elif (mesh_files is not None) ^ (pyfr_configs is not None):
-            raise(ValueError('Both mesh files and PyFR config files must be supplied'))
-        #integrators for randomly generated Bezier geometry cases
-        self.bezier_case_prefix = bezier_case_prefix if bezier_case_prefix is not None else 'shape_'
-        self.bezier_config = self._merge_bezier_opts(bezier_config)
-        if (n_bezier > 0) and (self.bezier_config is not None):
-            cfg_iterator = itertools.repeat(pyfr_configs if isinstance(pyfr_configs,str) else pyfr_configs[0], n_bezier)
-            backend_iterator = itertools.repeat(backend, n_bezier)
-            integ_ids = [next(self.device_placement_counter) for _ in range(n_bezier)]
-
-            integs = []
-            for c,b,i in zip(cfg_iterator, backend_iterator, integ_ids):
-                integs.append(self._create_bezier_integrator(c,b,i))
-            self.integrators = self.integrators + list(integs)
-
-        ###################
-        #Times to save the solution at - for self.generate_data()
-        #For now, only generation of data in advance is supported.
-        ###################
-        if isinstance(sample_times, list) or isinstance(sample_times, tuple):
-            if isinstance(sample_times[2], float):
-                sample_times[2] = round((sample_times[1] - sample_times[0])/sample_times[2])+1
-            sample_times = np.linspace(*sample_times)
-        else:
-            sample_times = np.array(sample_times)
-        self.sample_times = sample_times#keeps track of the physical times to compute the soln at
-
-        ###################
-        #Create solver child processes, without starting the solution process
-        ###################
-        for integ in self.integrators:
-            integ.start()
-
-        #Preallocate solver cache
-        self._preallocate_caches()
-
-    def _merge_bezier_opts(self, user_opts):
-        if user_opts is None:
-            return self.bezier_default_opts
-        else:
-            merged_opts = {}
-            for field in self.bezier_default_opts:
-                merged_opts[field] = {**(self.bezier_default_opts[field]), **(user_opts.get(field, {}))}
-            return merged_opts
+        return device_placement_map, device_placement_wraparound
 
     @staticmethod
     def _handle_case_ids(case_ids, mesh_files):
@@ -231,8 +254,26 @@ class BasePyFRDatahandler:
         return PyFRIntegratorHandler(mesh_file_path, config_path, backend = backend, device_id = device_id, case_id = case_id, residuals_path = residuals_path, residuals_frequency = self.residuals_frequency)
 
     def _create_bezier_integrator(self, config_path, backend, integrator_id = None):
-        shape = Shape(**self.bezier_config['shape'])
-        shape.generate(**self.bezier_config['generate'])
+        
+        if self.bezier_mapping_quality_threshold is not None:
+            max_tries = 25
+            check_mapping = [self.bezier_config['mesh'].get('xmin', -1.0),
+                             self.bezier_config['mesh'].get('xmax', 1.0),
+                             self.bezier_config['mesh'].get('ymin', -1.0),
+                             self.bezier_config['mesh'].get('ymax', 1.0)]
+            generate_opts = copy.deepcopy(self.bezier_config['generate'])
+            generate_opts['check_mapping'] = check_mapping
+            for i in range(max_tries):
+                shape = Shape(**self.bezier_config['shape'])
+                qual = shape.generate(**generate_opts)
+                if (qual[0] < self.bezier_mapping_quality_threshold) and (qual[1] < self.bezier_mapping_quality_threshold):
+                    print(qual)
+                    break
+                if i == (max_tries-1):
+                    raise(RuntimeError('Could not create Bezier shape with sufficient mapping quality.'))
+        else:
+            shape = Shape(**self.bezier_config['shape'])
+            _ = shape.generate(**self.bezier_config['generate'])
         mesh_file_path, n_eles = shape.mesh(**self.bezier_config['mesh'])
         print(f'Meshed {mesh_file_path} with {n_eles} elements')
         case_id = self.bezier_case_prefix + str(shape.index)
@@ -243,16 +284,20 @@ class BasePyFRDatahandler:
             integ.advance_to(t)
 
     @staticmethod
-    def _get_snapshot(integ):
+    def _get_snapshot(integ, concatenated=True):
         #overload this to record different quantities
         solns = integ.concatenated_soln(gradients=False).transpose(1,0)
         grads = integ.concatenated_soln(gradients=True).transpose(1,0)
-        return np.concatenate([solns,grads],-1)
+        return np.concatenate([solns,grads],-1) if concatenated else (solns, grads)
+        
 
     #@staticmethod
     def _get_snapshot_wrap(self, integ, queue):
         snapshot = self._get_snapshot(integ)
         queue.put((integ.case_id,snapshot))
+
+    def _place_into_cache(self, tidx, r):
+        self.cache[r[0]][tidx] = r[1]
 
     def _record_snapshots(self, tidx):
         q = multiprocessing.Queue()
@@ -263,7 +308,7 @@ class BasePyFRDatahandler:
             processes.append(p)
         for p in processes:
             r = q.get()
-            self.cache[r[0]][tidx] = r[1]
+            self._place_into_cache(tidx, r)
         for p in processes:
             p.join()
         #with concurrent.futures.ProcessPoolExecutor() as executor:
