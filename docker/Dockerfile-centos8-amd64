@@ -1,0 +1,19 @@
+FROM nvidia/cuda:11.2.1-cudnn8-devel-centos8
+
+RUN sed -i 's/#baseurl/baseurl/g' /etc/yum.repos.d/CentOS-Linux-BaseOS.repo
+RUN sed -i 's/mirror/vault/g' /etc/yum.repos.d/CentOS-Linux-BaseOS.repo
+RUN sed -i 's/mirror/vault/g' /etc/yum.repos.d/CentOS-Linux-AppStream.repo
+RUN sed -i 's/#baseurl/baseurl/g' /etc/yum.repos.d/CentOS-Linux-AppStream.repo
+RUN sed -i 's/mirror/vault/g' /etc/yum.repos.d/CentOS-Linux-PowerTools.repo
+RUN sed -i 's/#baseurl/baseurl/g' /etc/yum.repos.d/CentOS-Linux-PowerTools.repo
+RUN sed -i 's/enabled=0/enabled=1/g' /etc/yum.repos.d/CentOS-Linux-PowerTools.repo
+
+RUN dnf install -y python39 python39-pip python39-setuptools python39-devel python39-scipy git wget openmpi-devel gcc-gfortran metis-devel \
+	libcublas-devel-11-2 cuda-nvrtc-devel-11-2 mesa-libGLU libXrender libXcursor libXft libXinerama
+RUN source /etc/profile.d/modules.sh && module load mpi && pip3 install tensorflow==2.7.0 h5py pyfr==1.13.0 \
+								gmsh pygmsh tqdm scikit-learn
+
+RUN cd / && git clone https://github.com/aligirayhanozbay/pydscpack/ && cd /pydscpack && pip3 install -e .
+RUN cd / && git clone --recursive https://github.com/aligirayhanozbay/flow_prediction
+
+RUN pip3 install --upgrade numpy
