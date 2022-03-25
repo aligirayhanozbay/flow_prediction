@@ -422,7 +422,7 @@ def compute_error(results, dataset_metadata, domain_extents, save_folder=None, p
     maes_preds_rc_targets = {k:maefn(preds_rc_masked[k],targets_masked) for k in preds_rc_masked}
     mapes_preds_rc_targets = {k:mape_with_threshold(preds_rc_masked[k], targets_masked, percentage_error_threshold, max_magnitude_threshold) for k in preds_rc_masked}
     maes_inpgt_inprc = maefn(inputs_gt_masked, inputs_rc_masked)
-    mapes_inpgt_inprc = mape_with_threshold(inputs_rc_masked, inputs_gt_masked)
+    mapes_inpgt_inprc = mape_with_threshold(inputs_rc_masked, inputs_gt_masked, percentage_error_threshold, max_magnitude_threshold)
     print(f'MAE preds_gt - targets: {maes_preds_gt_targets}')
     print(f'MAE preds_rc - targets: {maes_preds_rc_targets}')
     print(f'MAPE preds_gt - targets: {mapes_preds_gt_targets}')
