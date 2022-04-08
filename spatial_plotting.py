@@ -43,7 +43,7 @@ def _parse_args_spatial():
 
     return args
 
-def _init_dataset(path, config, bsize=None):
+def _init_dataset(path, config, bsize=None, **other_args):
     if isinstance(config, str):
         dset_config = json.load(open(config, 'r'))['dataset']
     else:
@@ -57,7 +57,8 @@ def _init_dataset(path, config, bsize=None):
     train_dataset, test_dataset = ShallowDecoderDataset(path,
                                                         return_normalization_parameters=True,
                                                         return_case_names=True,
-                                                        **dset_config
+                                                        **dset_config,
+                                                        **other_args
                                                         )
     return train_dataset, test_dataset
 
@@ -158,7 +159,7 @@ def extract_dataset_metadata(dataset_path, full_field_mask = None):
         md['n_gt_vars'] = len(md['variable_names'])
         md['target_var_indices'] = list(range(len(md['variable_names'])))
 
-    md['n_vsensors'] = {75:25, 34:9, 16:4}[md['sensor_locations'][list(md['sensor_locations'].keys())[0]].shape[-1]]
+    md['n_vsensors'] = {75:25, 34:9, 16:4}[md['sensor_locations'][list(md['sensor_locations'].keys())[0]].shape[-1]]#TODO: make this more general somehow
 
     return md
         
@@ -356,6 +357,8 @@ def compute_error(results, dataset_metadata, domain_extents, save_folder=None, p
     
     summary = {k:{'mae':maes[k], 'mape':mapes[k]} for k in maes}
     return summary
+
+
 
 if __name__ == '__main__':
     mpl.rcParams['figure.dpi'] = 900
