@@ -52,7 +52,7 @@ def _parse_args_spatiotemporal():
     return args
 
 def _init_dataset(path, config, reconstruction_model=None, bsize=None):
-
+    
     if (isinstance(reconstruction_model, list) or isinstance(reconstruction_model, tuple)):
         if (len(reconstruction_model) == 2):
             reconstruction_model_config = None
@@ -70,7 +70,10 @@ def _init_dataset(path, config, reconstruction_model=None, bsize=None):
         if reconstruction_model_config is None:
             reconstruction_model_config = copy.deepcopy(config.get('reconstruction_model', None))
     else:
-        dset_config = copy.deepcopy(config['dataset'])
+        try:
+            dset_config = copy.deepcopy(config['dataset'])
+        except:
+            dset_config = copy.deepcopy(config)
         if reconstruction_model_config is None:
             reconstruction_model_config = copy.deepcopy(config.get('reconstruction_model', None))
 
@@ -86,7 +89,11 @@ def _init_dataset(path, config, reconstruction_model=None, bsize=None):
     dset_config['dataset_kwargs']['p_gt_substitute'] = 1.0
     
     if (reconstruction_model_config is not None) and (reconstruction_model_type is not None) and (reconstruction_model_weights is not None):
-        dm = extract_dataset_metadata(path, config['dataset'].get('full_field_mask',None))
+        try:
+            ffm_dm = config['dataset'].get('full_field_mask',None)
+        except:
+            ffm_dm = config.get('full_field_mask', None)
+        dm = extract_dataset_metadata(path, ffm_dm)
         output_shape = (None, dm['n_gt_vars'], *dm['grid_shape'])
         
         try:
@@ -96,7 +103,7 @@ def _init_dataset(path, config, reconstruction_model=None, bsize=None):
             n_sensors = sensor_locs[next(iter(sensor_locs))].shape[0]
             n_fieldvars = len(dm['variable_names'])
             input_shape = (None, n_sensors * n_fieldvars)
-            
+        
         reconstruction_model = _init_reconstruction_model([[None,reconstruction_model_type,reconstruction_model_config,reconstruction_model_weights]], input_shape, output_shape)[0]
     dset_config['dataset_kwargs']['reconstruction_model'] = reconstruction_model
     if reconstruction_model is not None:

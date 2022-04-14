@@ -3,7 +3,7 @@ import functools
 import itertools
 import json
 import copy
-
+import pickle
 from tqdm import tqdm
 import h5py
 import tensorflow as tf
@@ -11,6 +11,7 @@ import numpy as np
 import pydscpack
 
 from spatial_plotting import extract_dataset_metadata, _init_models as _init_models_base, _init_dataset as _init_dataset_base, mape_with_threshold as mape
+from spatiotemporal_plotting import _init_dataset as _init_dataset_spatiotemporal, _init_models as _init_models_spatiotemporal
 
 def _parse_args_clcd():
 
@@ -22,6 +23,14 @@ def _parse_args_clcd():
                         nargs=4,
                         metavar=('identifier', 'model_type', 'config', 'weights')
                         )
+    parser.add_argument('-r', '--reconstruction_model',
+                        nargs=3,
+                        metavar=('identifier', 'model_type', 'weights'),
+                        action='append',
+                        help='model used to reconstruct the snapshots at t. supply exactly as many as models supplied via -m. args.reconstruction_model[i] is used to generate inputs for args.model[i]. do not supply any for spatial-only/non-denoised results.',
+                        default=None)
+    parser.add_argument('-b', type=int, help='batch size override', default=None)
+    parser.add_argument('-o', type=str, help='output file path. if not provided, results will be printed instead.', default=None)
     parser.add_argument('--rho', type=float, help='Density', default=1.0)
     parser.add_argument('--nu', type=float, help='1/(Reynolds number)', default=1.0)
     
@@ -32,8 +41,24 @@ def _parse_args_clcd():
 
 
 def _init_models(x, input_shapes, output_shapes, var_order=None):
-
-    models = list(itertools.chain.from_iterable(list(map(lambda m,*args: _init_models_base([m],*args), x, input_shapes, output_shapes))))
+    
+    if input_shapes is None:
+        os = []
+        for o in output_shapes:
+            if len(o) == 2:
+                o = [1,1] + list(o)
+            elif len(o) == 3:
+                o = [None] + list(o)
+            os.append(o)
+        models = list(itertools.chain.from_iterable(list(map(
+            lambda m, *args: _init_models_spatiotemporal([m], *args),
+            x, os
+        ))))
+    else:
+        models = list(itertools.chain.from_iterable(list(map(
+            lambda m,*args: _init_models_base([m],*args),
+            x, input_shapes, output_shapes
+        ))))
 
     #field map tells us which model to use for each variable
     #if two models predict the same variable, this function prioritizes the first
@@ -71,7 +96,8 @@ def _unfiltered_var_info(dataset_path):
         nvars = len(list(f.attrs.keys()))-1
         return nvars, [f.attrs[f'variable{k}'] for k in range(nvars)]
 
-def _init_dataset(path, configs, bsize=None, use_training_dataset=False):
+def _init_dataset(path, configs, bsize=None, use_training_dataset=False, reconstruction_models=None):
+    
     dset_configs = []
     for config in configs:
         if isinstance(config, str):
@@ -79,24 +105,34 @@ def _init_dataset(path, configs, bsize=None, use_training_dataset=False):
         else:
             dset_config = copy.deepcopy(config)
         dset_configs.append(dset_config)
+    
+    if reconstruction_models is not None:
+        model_dsets = []
+        for config,rm in zip(dset_configs, reconstruction_models):
+            rm = [rm[1],rm[0],rm[2]]
+            ds = _init_dataset_spatiotemporal(path,
+                                              config,
+                                              reconstruction_model=rm,
+                                              bsize=bsize)[int(not use_training_dataset)]
+            model_dsets.append(ds)
+        base_ds = None
+    else:
+        metadatas = list(map(extract_dataset_metadata, itertools.repeat(path), [d.get('full_field_mask',None) for d in dset_configs]))
+        base_config = copy.deepcopy(dset_configs[0])
+        _ = base_config.pop('full_field_mask',None)
+        base_ds = _init_dataset_base(path, base_config, bsize=bsize, reshape_to_grid=True, retain_variable_dimension=True)[int(not use_training_dataset)]
 
-    metadatas = list(map(extract_dataset_metadata, itertools.repeat(path), [d.get('full_field_mask',None) for d in dset_configs]))
-
-    base_config = copy.deepcopy(dset_configs[0])
-    _ = base_config.pop('full_field_mask',None)
-    base_ds = _init_dataset_base(path, base_config, bsize=bsize, reshape_to_grid=True, retain_variable_dimension=True)[int(not use_training_dataset)]
-
-    model_dsets = []
-    nvars, var_order = _unfiltered_var_info(path)
-    for md,config in zip(metadatas,dset_configs):
-        ffm = config.get('full_field_mask',None)
-        unfiltered_indices = [var_order.index(v) for v in ffm]
-        pf = functools.partial(_dset_map_variable, nvars, unfiltered_indices)
-        if ffm is None:
-            model_dsets.append(base_ds)
-        else:
-            dset = base_ds.map(pf)
-            model_dsets.append(dset)
+        model_dsets = []
+        nvars, var_order = _unfiltered_var_info(path)
+        for md,config in zip(metadatas,dset_configs):
+            ffm = config.get('full_field_mask',None)
+            unfiltered_indices = [var_order.index(v) for v in ffm]
+            pf = functools.partial(_dset_map_variable, nvars, unfiltered_indices)
+            if ffm is None:
+                model_dsets.append(base_ds)
+            else:
+                dset = base_ds.map(pf)
+                model_dsets.append(dset)
 
     return base_ds, model_dsets
 
@@ -108,7 +144,8 @@ def predict(models, datasets, identifiers=None):
 
     overall_results = []
     for model,identifier,dataset in zip(models,identifiers,datasets):
-        n_batches = int(dataset.cardinality())
+        is_spatiotemporal_dataset = not isinstance(dataset, tf.data.Dataset)
+        n_batches = len(dataset) if is_spatiotemporal_dataset else int(dataset.cardinality())
         
         inputs = []
         norm_params = []
@@ -118,12 +155,23 @@ def predict(models, datasets, identifiers=None):
         
         pbar = tqdm(total = n_batches)
         pbar.set_description(str(identifier))
-        for x,y,n,c in iter(dataset):
-            inputs.append(x.numpy())
-            norm_params.append(n.numpy())
-            case_names.append(np.array(list(map(lambda x: x.decode('utf8'),c.numpy()))))
-            ground_truths.append(y.numpy())
-            preds.append(model(x).numpy())
+        
+        for data in iter(dataset):
+            if is_spatiotemporal_dataset:
+                x,y,r,n,c = data
+                #import pdb; pdb.set_trace()
+                preds.append(model(r[:,0]).numpy())
+                case_names.append(c[:,0])
+                ground_truths.append(y)
+                norm_params.append(n[:,1])
+                inputs.append(x)
+            else:
+                x,y,n,c = data
+                preds.append(model(x).numpy())
+                case_names.append(np.array(list(map(lambda x: x.decode('utf8'),c.numpy()))))
+                ground_truths.append(y.numpy())
+                norm_params.append(n.numpy())
+                inputs.append(x.numpy())
             pbar.update(1)
         results = {
             'ground_truths': np.concatenate(ground_truths,0),
@@ -135,9 +183,10 @@ def predict(models, datasets, identifiers=None):
         overall_results.append(results)
         
     return overall_results
+    
 
 def compute_clcd(results, field_map, dset_path, dataset_metadata, rho, nu):
-
+    
     p_preds = results[field_map['p'][0]]['predictions'][:,field_map['p'][1]] + np.expand_dims(results[field_map['p'][0]]['norm_params'][:,field_map['p'][1]], [1,2])
     u_preds = results[field_map['u'][0]]['predictions'][:,field_map['u'][1]] + np.expand_dims(results[field_map['u'][0]]['norm_params'][:,field_map['u'][1]], [1,2])
     v_preds = results[field_map['v'][0]]['predictions'][:,field_map['v'][1]] + np.expand_dims(results[field_map['v'][0]]['norm_params'][:,field_map['v'][1]], [1,2])
@@ -247,30 +296,46 @@ def compute_clcd(results, field_map, dset_path, dataset_metadata, rho, nu):
         )
     }
 
-    print(forces_pct_error)
-    print(forces_abs_error)
-    return forces
+    return forces, forces_pct_error, forces_abs_error
 
 if __name__ == '__main__':
 
     tf.keras.backend.set_image_data_format('channels_first')
     args = _parse_args_clcd()
 
-    base_ds, model_ds = _init_dataset(args.dataset, [m[2] for m in args.model])
-    #import pdb; pdb.set_trace()
-
-    models, field_map = _init_models(args.model,
-                          [m.element_spec[0].shape for m in model_ds],
-                          [m.element_spec[1].shape for m in model_ds],
-                          var_order=_unfiltered_var_info(args.dataset)[1])
+    base_ds, model_ds = _init_dataset(args.dataset,
+                                      [m[2] for m in args.model],
+                                      reconstruction_models=args.reconstruction_model,
+                                      bsize=args.b)
+    
+    if args.reconstruction_model is None:
+        models, field_map = _init_models(args.model,
+                                         [m.element_spec[0].shape for m in model_ds],
+                                         [m.element_spec[1].shape for m in model_ds],
+                                         var_order=_unfiltered_var_info(args.dataset)[1])
+    else:
+        models, field_map = _init_models(args.model,
+                                         None,
+                                         [m.data_shape for m in model_ds],
+                                         var_order=_unfiltered_var_info(args.dataset)[1])
 
     ffm = json.load(open(args.model[0][2],'r'))['dataset'].get('full_field_mask',None)
     dataset_metadata = extract_dataset_metadata(args.dataset,ffm)
 
     preds = predict(models,model_ds,[x[0] for x in args.model])
-    compute_clcd(preds, field_map, args.dataset, dataset_metadata, args.rho, args.nu)
-    import pdb; pdb.set_trace()
-    
+
+    clcd = compute_clcd(preds, field_map, args.dataset, dataset_metadata, args.rho, args.nu)
+
+    res = {
+        'forces': clcd[0],
+        'forces_pct_error': clcd[1],
+        'forces_abs_error': clcd[2]
+    }
+
+    if args.o is not None:
+        pickle.dump(res, open(args.o,'wb'))
+    else:
+        print(res)
 
     
     

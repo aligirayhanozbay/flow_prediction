@@ -94,6 +94,10 @@ class TimeMarchingDataset(tf.keras.utils.Sequence):
     def n_samples(self):
         return self.n_cases * (self.n_timesteps-self.temporal_stride)
 
+    @property
+    def data_shape(self):
+        return self.full_field_values.shape[2:]
+    
     def _generate_per_sample_case_temporal_indices(self):
         case_idxs = np.arange(self.n_cases)
         t0 = np.arange(self.n_timesteps-self.temporal_stride)
