@@ -9,6 +9,7 @@ import h5py
 import tensorflow as tf
 import numpy as np
 import pydscpack
+import scipy.spatial, scipy.interpolate
 
 from spatial_plotting import extract_dataset_metadata, _init_models as _init_models_base, _init_dataset as _init_dataset_base, mape_with_threshold as mape
 from spatiotemporal_plotting import _init_dataset as _init_dataset_spatiotemporal, _init_models as _init_models_spatiotemporal
@@ -31,6 +32,7 @@ def _parse_args_clcd():
                         default=None)
     parser.add_argument('-b', type=int, help='batch size override', default=None)
     parser.add_argument('-o', type=str, help='output file path. if not provided, results will be printed instead.', default=None)
+    parser.add_argument('-i', action='store_true', help='interpolate field values to object surfaces. useful for e.g. cartesian sampling datasets.')
     parser.add_argument('--rho', type=float, help='Density', default=1.0)
     parser.add_argument('--nu', type=float, help='1/(Reynolds number)', default=1.0)
     
@@ -159,7 +161,6 @@ def predict(models, datasets, identifiers=None):
         for data in iter(dataset):
             if is_spatiotemporal_dataset:
                 x,y,r,n,c = data
-                #import pdb; pdb.set_trace()
                 preds.append(model(r[:,0]).numpy())
                 case_names.append(c[:,0])
                 ground_truths.append(y)
@@ -183,9 +184,18 @@ def predict(models, datasets, identifiers=None):
         overall_results.append(results)
         
     return overall_results
-    
 
-def compute_clcd(results, field_map, dset_path, dataset_metadata, rho, nu):
+def interpolate_to(c,values,t):
+    res = []
+    for v in values:
+        interpolator = scipy.interpolate.CloughTocher2DInterpolator(c,v.reshape(-1))
+        res.append(interpolator(t))
+    return np.stack(res,0)
+
+def imag_to_2d(z):
+    return np.stack([np.real(z), np.imag(z)],-1)
+
+def compute_clcd(results, field_map, dset_path, dataset_metadata, rho, nu, interpolate=False):
     
     p_preds = results[field_map['p'][0]]['predictions'][:,field_map['p'][1]] + np.expand_dims(results[field_map['p'][0]]['norm_params'][:,field_map['p'][1]], [1,2])
     u_preds = results[field_map['u'][0]]['predictions'][:,field_map['u'][1]] + np.expand_dims(results[field_map['u'][0]]['norm_params'][:,field_map['u'][1]], [1,2])
@@ -199,7 +209,7 @@ def compute_clcd(results, field_map, dset_path, dataset_metadata, rho, nu):
 
     forces = {}
     
-    for shape in dset:
+    for shape in tqdm(dset, desc='Computing Cl and Cd'):
         mp = {k:np.array(dset[shape]['amap'][k]) for k in dset[shape]['amap']}
         amap = pydscpack.AnnulusMap(mapping_params = mp)
 
@@ -208,17 +218,52 @@ def compute_clcd(results, field_map, dset_path, dataset_metadata, rho, nu):
         if len(indices) == 0:
             continue
 
-        #[0,:]->surface of the object
+        #do interpolation if needed
+        if interpolate:
+            #get coordinates of near field gridpts
+            grid_coords = imag_to_2d(dset[shape]['full_field_locations_z'] )
+            tess = scipy.spatial.Delaunay(grid_coords)
+
+            near_field_w, near_field_z = map(lambda x: x[:2], amap._generate_annular_grid(n_pts=interpolate if (isinstance(interpolate, tuple) or isinstance(interpolate, list)) else (64,256)))
+            w = near_field_w[1]
+            target_coords = imag_to_2d(near_field_z)
+
+            #get surface field values
+            surface_pressure_pred = interpolate_to(tess,p_preds[indices],target_coords[0])
+            surface_pressure_gt = interpolate_to(tess,p_gt[indices], target_coords[0])
+
+            surface_u_pred = interpolate_to(tess, u_preds[indices], target_coords[1])
+            surface_u_gt = interpolate_to(tess, u_gt[indices], target_coords[1])
+            
+            surface_v_pred = interpolate_to(tess, v_preds[indices], target_coords[1])
+            surface_v_gt = interpolate_to(tess, v_gt[indices], target_coords[1])
+            
+        else:
+            #get coordinates of near field gridpts
+            near_field_z = np.array(dset[shape]['full_field_locations_z']).reshape(*dataset_metadata['grid_shape'])[:2,:]
+            w = np.array(dset[shape]['full_field_locations_w']).reshape(*dataset_metadata['grid_shape'])[1,:]
+
+            #get surface field values
+            surface_pressure_pred = p_preds[indices,0,:]
+            surface_pressure_gt = p_gt[indices,0,:]
+
+            surface_u_pred = u_preds[indices,1,:]
+            surface_u_gt = u_gt[indices,1,:]
+
+            surface_v_pred = v_preds[indices,1,:]
+            surface_v_gt = v_gt[indices,1,:]
+
         #get surface normals
-        surface_z, n1 = np.array(dset[shape]['full_field_locations_z']).reshape(*dataset_metadata['grid_shape'])[:2,:]
+        #[0,:]->surface of the object
+        surface_z, n1 = near_field_z
         surface_z_padded = np.pad(surface_z, (1,1), mode='wrap')
         surface_tangent = surface_z_padded[2:] - surface_z_padded[:-2]
         surface_tangent = surface_tangent / np.sqrt(surface_tangent * np.conj(surface_tangent))
         surface_normal = surface_tangent * (-1j)
-        
+
         #pressure force
-        pp = (-surface_normal) * p_preds[indices,0,:]
-        pg = (-surface_normal) * p_gt[indices,0,:]
+        pp = (-surface_normal) * surface_pressure_pred
+        pg = (-surface_normal) * surface_pressure_gt
         
         #need to compute vel. vector parallel to the object surface just above the surface, u[1,:] and v[1,:]
         #let r(t)=x(t)+i*y(t)=(t+r_i)*exp(i*theta) be a line from the inner ring of the annulus to the outer ring
@@ -226,7 +271,6 @@ def compute_clcd(results, field_map, dset_path, dataset_metadata, rho, nu):
         #to find the tangents in the z-domain we need to simply do (df/dz)*(dr/dt)
         #rotate tangent for the normal. as dt->0, the normal will be parallel to the object surface.
         #assume velocities on the object surface is 0. 
-        w = np.array(dset[shape]['full_field_locations_w']).reshape(*dataset_metadata['grid_shape'])[1,:]
         drdt = np.exp(1j*np.angle(w))
         dzdw = amap.dzdw(w)
         radial_tangent = dzdw*drdt
@@ -237,10 +281,10 @@ def compute_clcd(results, field_map, dset_path, dataset_metadata, rho, nu):
 
         rotated_velocities_parallel_pred = np.einsum('ij...,j...->i...',
                                                      rot_matrices,
-                                                     np.stack([u_preds[indices,1,:], v_preds[indices,1,:]],0))[0]
+                                                     np.stack([surface_u_pred, surface_v_pred],0))[0]
         rotated_velocities_parallel_gt = np.einsum('ij...,j...->i...',
                                                    rot_matrices,
-                                                   np.stack([u_gt[indices,1,:], v_gt[indices,1,:]],0))[0]
+                                                   np.stack([surface_u_gt, surface_v_gt],0))[0]
         dn = n1-surface_z
         dn = np.real((dn*np.conj(dn))**0.5)
 
@@ -324,7 +368,7 @@ if __name__ == '__main__':
 
     preds = predict(models,model_ds,[x[0] for x in args.model])
 
-    clcd = compute_clcd(preds, field_map, args.dataset, dataset_metadata, args.rho, args.nu)
+    clcd = compute_clcd(preds, field_map, args.dataset, dataset_metadata, args.rho, args.nu, interpolate=args.i)
 
     res = {
         'forces': clcd[0],
