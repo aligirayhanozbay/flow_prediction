@@ -1,4 +1,6 @@
-his repository includes Tensorflow-based implementations of several machine learning models for the reconstruction of unsteady two- and three-dimensional fluid flows around arbitrary objects using a Schwarz-Christoffel conformal mapping based dense field sampling strategy.
+![](readme.png)
+
+This repository includes Tensorflow-based implementations of several machine learning models for the reconstruction of unsteady two- and three-dimensional fluid flows around arbitrary objects using a Schwarz-Christoffel conformal mapping based dense field sampling strategy.
 
 The mappings are computed using [pydscpack](https://github.com/aligirayhanozbay/pydscpack), a set of Python bindings to a numerical Schwarz-Christoffel mapping computation package by [Hu (1998)](https://dl.acm.org/doi/10.1145/292395.291204).
 
