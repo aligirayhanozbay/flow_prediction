@@ -40,7 +40,7 @@ class BasePyFRDatahandler:
         }
     }
     device_placement_counter = itertools.count()
-    def __init__(self, mesh_files = None, case_ids = None, pyfr_configs = None, n_bezier = 0, bezier_config = None, bezier_case_prefix = None, load_cached = False, force_remesh = False, keep_directories_clean = True, backend = None, auto_device_placement = False, sample_times = None, residuals_folder = None, residuals_frequency = 20, bezier_mapping_quality_threshold = np.inf):
+    def __init__(self, mesh_files = None, case_ids = None, pyfr_configs = None, n_bezier = 0, bezier_config = None, bezier_case_prefix = None, load_cached = False, force_remesh = False, keep_directories_clean = True, backend = None, auto_device_placement = False, sample_times = None, residuals_folder = None, residuals_frequency = 20, bezier_mapping_quality_threshold = np.inf, save_dtype = 'float64'):
         '''
         -mesh_files: List[str]. Paths to .geo/.msh/.pyfrm files.
         -case_ids: List[str]. Case ID to assign to each solver in mesh_files. 
@@ -56,8 +56,10 @@ class BasePyFRDatahandler:
         -residuals_folder: str. Folder to put residual information in. No residuals will be written out if left as None.
         -residuals_frequency: int. # of timesteps per residual output.
         -bezier_mapping_quality_threshold: float. 
+        -save_dtype: str - "float16", "float32" or "float64".
         '''
         backend = 'openmp' if backend is None else backend
+        self.save_dtype = save_dtype
         self.force_remesh = force_remesh
         self.keep_directories_clean = keep_directories_clean
         self.residuals_folder = residuals_folder
@@ -311,14 +313,6 @@ class BasePyFRDatahandler:
             self._place_into_cache(tidx, r)
         for p in processes:
             p.join()
-        #with concurrent.futures.ProcessPoolExecutor() as executor:
-        #    snapshots = list(executor.map(self._get_snapshot, self.integrators))
-        #for snapshot, integ in zip(snapshots, self.integrators):
-        #    self.cache[integ.case_id][tidx] = snapshot
-        
-        #for integ in self.integrators:
-        #    self.cache[integ.case_id][tidx,...,:integ.n_solnvars] = 
-        #    self.cache[integ.case_id][tidx,...,integ.n_solnvars:] = 
         
     def generate_data(self):
         for tidx, t in enumerate(self.sample_times):
@@ -331,10 +325,18 @@ class BasePyFRDatahandler:
         with h5py.File(path, 'w') as f:
             for integ in self.integrators:
                 subgroup = f.create_group(integ.case_id)
-                subgroup.create_dataset('solution', data=self.cache[integ.case_id][...,:integ.n_solnvars])
-                subgroup.create_dataset('gradients', data=self.cache[integ.case_id][...,integ.n_solnvars:])
-                subgroup.create_dataset('coordinates', data=integ.mesh_coords)
-                #f.create_dataset(integ.case_id, data=self.cache[integ.case_id])
+                subgroup.create_dataset('solution',
+                                        data=self.cache[integ.case_id][...,:integ.n_solnvars],
+                                        dtype=self.save_dtype
+                                        )
+                subgroup.create_dataset('gradients',
+                                        data=self.cache[integ.case_id][...,integ.n_solnvars:],
+                                        dtype=self.save_dtype
+                                        )
+                subgroup.create_dataset('coordinates',
+                                        data=integ.mesh_coords,
+                                        dtype=self.save_dtype
+                                        )
 
     def _snapshot_shape(self, integ):
         return (integ.mesh_coords_shape[0], integ.n_solnvars*(1+integ.n_spatialdims))
@@ -345,7 +347,7 @@ class BasePyFRDatahandler:
     def _preallocate_caches(self):
         self.cache = {}
         for integ in self.integrators:
-            self.cache[integ.case_id] = np.zeros(self._compute_cache_shape(integ))
+            self.cache[integ.case_id] = np.zeros(self._compute_cache_shape(integ)).astype(self.save_dtype)
 
     def __getitem__(self, idx=None):
         raise(NotImplementedError)
@@ -365,6 +367,7 @@ if __name__ == '__main__':
     parser.add_argument('--no-auto-device-placement', action='store_false')
     parser.add_argument('--residuals_folder', type=str, help='Folder to save solution residuals in. If not specified, no residuals will be recorded.', default=None)
     parser.add_argument('--residuals_frequency', type=int, default=20, help='Timestep frequency for recording residuals')
+    parser.add_argument('--save_dtype', type=str, default='float64', help='Floating point data type for saving')
     args = parser.parse_args()
 
     if args.bezier_cfg is not None:
@@ -383,7 +386,8 @@ if __name__ == '__main__':
         sample_times = args.sample_times,
         bezier_config = bezier_cfg,
         residuals_folder = args.residuals_folder,
-        residuals_frequency = args.residuals_frequency
+        residuals_frequency = args.residuals_frequency,
+        save_dtype = args.save_dtype
     )
 
     print(f'Running cases: {[i.case_id for i in dh.integrators]}')

@@ -28,8 +28,12 @@ class SequentialPyFRDatahandler(BasePyFRDatahandler):
             self.h5f[case_id]['gradients'][tidx] = grads
         else:
             subgroup = self.h5f.create_group(case_id)
-            subgroup.create_dataset('solution', [len(self.sample_times), *solns.shape])
-            subgroup.create_dataset('gradients', [len(self.sample_times), *grads.shape])
+            subgroup.create_dataset('solution',
+                                    [len(self.sample_times), *solns.shape],
+                                    dtype=self.save_dtype)
+            subgroup.create_dataset('gradients',
+                                    [len(self.sample_times), *grads.shape],
+                                    dtype=self.save_dtype)
 
     def _writer_process(self):
         try:
@@ -65,10 +69,7 @@ class SequentialPyFRDatahandler(BasePyFRDatahandler):
             device_id = device_ids[iidx]
             queue_idx = unique_device_ids.index(device_id)
             queues[queue_idx].put(iidx)
-
-        # import pdb; pdb.set_trace()
-        # for integ in self.integrators:
-        #     integ.start()
+            
         cur_integs = [q.get() for q in queues]
         while not np.all([(c is None) for c in cur_integs]):
             print(f'Running cases: {cur_integs}')
@@ -117,6 +118,7 @@ if __name__ == '__main__':
     parser.add_argument('--residuals_folder', type=str, help='Folder to save solution residuals in. If not specified, no residuals will be recorded.', default=None)
     parser.add_argument('--residuals_frequency', type=int, default=20, help='Timestep frequency for recording residuals')
     parser.add_argument('--mapping_quality', type=float, default=np.inf, help='Threshold for re-attempting mapping if map quality is low.')
+    parser.add_argument('--save_dtype', type=str, default='float64', help='Floating point data type for saving')
     args = parser.parse_args()
 
     if args.bezier_cfg is not None:
@@ -137,7 +139,8 @@ if __name__ == '__main__':
         residuals_folder = args.residuals_folder,
         residuals_frequency = args.residuals_frequency,
         bezier_mapping_quality_threshold = args.mapping_quality,
-        save_path = args.save_path
+        save_path = args.save_path,
+        save_dtype = args.save_dtype
     )
 
     print(f'Running cases: {[i.case_id for i in dh.integrators]}')
