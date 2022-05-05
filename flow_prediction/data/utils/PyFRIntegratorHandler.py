@@ -12,7 +12,7 @@ from .pyfr_solver_create import pyfr_solver_create
 
 class PyFRIntegratorHandler:
         #executor = concurrent.futures.ProcessPoolExecutor()
-        def __init__(self, mesh_path, ini_path, backend = 'openmp', device_id=None, case_id=None, residuals_path=None, residuals_frequency=20):
+        def __init__(self, mesh_path, ini_path, backend = 'openmp', device_id=None, case_id=None, residuals_path=None, residuals_frequency=20, forces_path=None, forces_frequency=20):
                 '''
         	Handler object to manage running multiple PyFR integrators (i.e. solvers) simultaneously.
 
@@ -24,6 +24,10 @@ class PyFRIntegratorHandler:
         	-backend: str. PyFR backend to use (openmp etc).
         	-device_id: int. id of the device to run the solver on. No effect for openmp backend.
         	-case_id: str. Unique identifier for the case/solver. Will be randomly generated if not provided.
+                -residuals_path: str. Folder to save residuals in. Not saved if not provided.
+                -residuals_frequency: int. Frequency of writing out residuals.
+                -forces_path: str. Folder to save forces in. Not saved if not provided.
+                -forces_frequency: int. Frequency of writing out forces.
         	'''
                 self._soln = None
                 self._process = None
@@ -40,6 +44,9 @@ class PyFRIntegratorHandler:
                 self.case_id = case_id if case_id is not None else secrets.token_hex(4)
                 self.residuals_path = residuals_path
                 self.residuals_frequency = residuals_frequency
+                self.forces_path = forces_path
+                self.forces_frequency = forces_frequency
+                
 
         def _raise_multiprocessing_error(self):
                 if (multiprocessing.current_process().name == 'MainProcess') and self.solver is None and self._process is None:#no solver available
@@ -67,12 +74,20 @@ class PyFRIntegratorHandler:
                 if self.residuals_path is not None:
                         #if 'soln-plugin-pseudostats' in ini:
                         #        warnings.warn('Overriding existing soln-plugin-pseudostats field in ini for residual recording.')
-                        ini.set('soln-plugin-pseudostats', 'file', self.residuals_path)
+                        ini.set('soln-plugin-pseudostats', 'file', f'{self.residuals_path}/{self.case_id}_residuals.csv')
                         ini.set('soln-plugin-pseudostats', 'nsteps', str(self.residuals_frequency))
                         ini.set('soln-plugin-pseudostats', 'header', 'true')
                 else:
                         ini.set('soln-plugin-pseudostats', 'file', '/dev/null')
-                        ini.set('soln-plugin-pseudostats', 'nsteps', 99999)
+                        ini.set('soln-plugin-pseudostats', 'nsteps', str(99999))
+
+                if self.forces_path is not None:
+                        ini.set('soln-plugin-fluidforce-obstacle', 'file', f'{self.forces_path}/{self.case_id}_forces.csv')
+                        ini.set('soln-plugin-fluidforce-obstacle', 'nsteps', str(self.forces_frequency))
+                        ini.set('soln-plugin-fluidforce-obstacle', 'header', 'true')
+                else:
+                        ini.set('soln-plugin-fluidforce-obstacle', 'file', '/dev/null')
+                        ini.set('soln-plugin-fluidforce-obstacle', 'nsteps', str(999999))
                 
                 self.solver = pyfr_solver_create(mesh, None, ini, self.backend)
 

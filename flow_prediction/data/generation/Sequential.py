@@ -117,6 +117,8 @@ if __name__ == '__main__':
     parser.add_argument('--no-auto-device-placement', action='store_false')
     parser.add_argument('--residuals_folder', type=str, help='Folder to save solution residuals in. If not specified, no residuals will be recorded.', default=None)
     parser.add_argument('--residuals_frequency', type=int, default=20, help='Timestep frequency for recording residuals')
+    parser.add_argument('--forces_folder', type=str, help='Folder to save calculated body forces in. If not specified, the body forces will not be recorded.', default=None)
+    parser.add_argument('--forces_frequency', type=int, default=20, help='Timestep frequency for recording forces')
     parser.add_argument('--mapping_quality', type=float, default=np.inf, help='Threshold for re-attempting mapping if map quality is low.')
     parser.add_argument('--save_dtype', type=str, default='float64', help='Floating point data type for saving')
     args = parser.parse_args()
@@ -138,6 +140,8 @@ if __name__ == '__main__':
         bezier_config = bezier_cfg,
         residuals_folder = args.residuals_folder,
         residuals_frequency = args.residuals_frequency,
+        forces_folder = args.forces_folder,
+        forces_frequency = args.forces_frequency,
         bezier_mapping_quality_threshold = args.mapping_quality,
         save_path = args.save_path,
         save_dtype = args.save_dtype

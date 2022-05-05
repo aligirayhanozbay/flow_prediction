@@ -40,7 +40,7 @@ class BasePyFRDatahandler:
         }
     }
     device_placement_counter = itertools.count()
-    def __init__(self, mesh_files = None, case_ids = None, pyfr_configs = None, n_bezier = 0, bezier_config = None, bezier_case_prefix = None, load_cached = False, force_remesh = False, keep_directories_clean = True, backend = None, auto_device_placement = False, sample_times = None, residuals_folder = None, residuals_frequency = 20, bezier_mapping_quality_threshold = np.inf, save_dtype = 'float64'):
+    def __init__(self, mesh_files = None, case_ids = None, pyfr_configs = None, n_bezier = 0, bezier_config = None, bezier_case_prefix = None, load_cached = False, force_remesh = False, keep_directories_clean = True, backend = None, auto_device_placement = False, sample_times = None, residuals_folder = None, residuals_frequency = 20, bezier_mapping_quality_threshold = np.inf, save_dtype = 'float64', forces_folder = None, forces_frequency = 20):
         '''
         -mesh_files: List[str]. Paths to .geo/.msh/.pyfrm files.
         -case_ids: List[str]. Case ID to assign to each solver in mesh_files. 
@@ -55,6 +55,8 @@ class BasePyFRDatahandler:
         -sample_times: List of 3 floats. Start, stop and step for snapshots' times.
         -residuals_folder: str. Folder to put residual information in. No residuals will be written out if left as None.
         -residuals_frequency: int. # of timesteps per residual output.
+        -forces_folder: str. Folder to put calculated forces in. Forces will be written out if left as None.
+        -forces_frequency: int. # of timesteps per forces output.
         -bezier_mapping_quality_threshold: float. 
         -save_dtype: str - "float16", "float32" or "float64".
         '''
@@ -64,6 +66,8 @@ class BasePyFRDatahandler:
         self.keep_directories_clean = keep_directories_clean
         self.residuals_folder = residuals_folder
         self.residuals_frequency = residuals_frequency
+        self.forces_folder = forces_folder
+        self.forces_frequency = forces_frequency
         self.bezier_case_prefix = bezier_case_prefix if bezier_case_prefix is not None else 'shape_'
         self.bezier_config = self._merge_bezier_opts(bezier_config)
         self.bezier_mapping_quality_threshold = bezier_mapping_quality_threshold
@@ -252,8 +256,8 @@ class BasePyFRDatahandler:
         else:
             device_id = None
         mesh_file_path = self._handle_mesh_file(mesh)
-        residuals_path = self.residuals_folder + '/' + case_id + '_residuals.csv' if self.residuals_folder is not None else None
-        return PyFRIntegratorHandler(mesh_file_path, config_path, backend = backend, device_id = device_id, case_id = case_id, residuals_path = residuals_path, residuals_frequency = self.residuals_frequency)
+        #residuals_path = self.residuals_folder + '/' + case_id + '_residuals.csv' if self.residuals_folder is not None else None
+        return PyFRIntegratorHandler(mesh_file_path, config_path, backend = backend, device_id = device_id, case_id = case_id, residuals_path = self.residuals_folder, residuals_frequency = self.residuals_frequency, forces_path = self.forces_folder, forces_frequency = self.forces_frequency)
 
     def _create_bezier_integrator(self, config_path, backend, integrator_id = None):
         
@@ -367,6 +371,8 @@ if __name__ == '__main__':
     parser.add_argument('--no-auto-device-placement', action='store_false')
     parser.add_argument('--residuals_folder', type=str, help='Folder to save solution residuals in. If not specified, no residuals will be recorded.', default=None)
     parser.add_argument('--residuals_frequency', type=int, default=20, help='Timestep frequency for recording residuals')
+    parser.add_argument('--forces_folder', type=str, help='Folder to save calculated body forces in. If not specified, the body forces will not be recorded.', default=None)
+    parser.add_argument('--forces_frequency', type=int, default=20, help='Timestep frequency for recording forces')
     parser.add_argument('--save_dtype', type=str, default='float64', help='Floating point data type for saving')
     args = parser.parse_args()
 
@@ -387,6 +393,8 @@ if __name__ == '__main__':
         bezier_config = bezier_cfg,
         residuals_folder = args.residuals_folder,
         residuals_frequency = args.residuals_frequency,
+        forces_folder = args.forces_folder,
+        forces_frequency = args.forces_frequency,
         save_dtype = args.save_dtype
     )
 
