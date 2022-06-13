@@ -17,8 +17,8 @@ for k in range(args.n):
     if args.m:
         max_retries = 10
         cur_tries = 0
-        mapping_quality = math.inf
-        while mapping_quality > args.m and (cur_tries<max_retries):
+        mapping_quality = (math.inf,math.inf)
+        while ((mapping_quality[0] > args.m) or (mapping_quality[1] > args.m)) and (cur_tries<max_retries):
             shape = Shape(**cfg['shape'])
             mapping_quality = shape.generate(**cfg['generate'], check_mapping=True)
             cur_tries += 1
