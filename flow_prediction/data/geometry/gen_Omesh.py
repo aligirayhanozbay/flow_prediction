@@ -24,7 +24,7 @@ for k in range(args.n):
             cur_tries += 1
             if args.v:
                 print(f'Shape {k} - generation attempt {cur_tries}: quality {mapping_quality} | threshold {args.m}')
-        if cur_tries == max_retries and mapping_quality > args.m:
+        if cur_tries == max_retries and ((mapping_quality[0] > args.m) or (mapping_quality[1] > args.m)):
             raise(RuntimeError('Reached max # of shape generation attempts.'))
     else:
         shape = Shape(**cfg['shape'])
